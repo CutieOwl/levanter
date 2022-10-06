@@ -9,7 +9,8 @@ from jax.experimental.pjit import with_sharding_constraint
 from jax.interpreters.pxla import PartitionSpec
 
 import haliax as hax
-from haliax.partitioning import ResourceAxis, ResourceMapping, auto_sharded
+from haliax import Axis
+from haliax.partitioning import ResourceAxis, ResourceMapping
 from haliax.util import named_call
 from levanter.jax_utils import reduce
 
@@ -88,33 +89,39 @@ def accumulate_gradients_sharded(
     microbatch_size = data_axis_size * per_device_parallelism
     num_micro_steps = batch_size // microbatch_size
     assert num_micro_steps * microbatch_size == batch_size
+    Microbatch = Axis("Microbatch", microbatch_size)
 
-    # do gradient accumulation on the data parallel axis, with model partitioned according to compute_axis_mapping
-    with hax.axis_mapping(compute_axis_mapping, merge=False):
-        with jax.named_scope("mass reshape"):
+    # first things first, we want a copy of our gradient sharded the same way as our model, along with a loss value
+    loss = jnp.zeros(())
+    grad = jax.tree_util.tree_map(jnp.zeros_like, model)
 
-            def _reshape(x):
-                x = x.reshape((microbatch_size, num_micro_steps) + x.shape[1:])
-                return with_sharding_constraint(x, PartitionSpec(ResourceAxis.DATA, *(None,) * (len(x.shape) - 1)))
+    # second, we want to reshape our data to (num_micro_steps, micro_batch_size, ...), sharded along the data axis
+    with jax.named_scope("mass reshape"), hax.axis_mapping(compute_axis_mapping, merge=False):
 
-            inputs = jax.tree_util.tree_map(_reshape, inputs)
+        def _reshape(x):
+            x = x.reshape((num_micro_steps, microbatch_size) + x.shape[1:])
+            return with_sharding_constraint(x, PartitionSpec(None, ResourceAxis.DATA, *(None,) * (len(x.shape) - 2)))
 
-        Microbatch = hax.Axis("microbatch", microbatch_size)
+        inputs = jax.tree_util.tree_map(_reshape, inputs)
 
-        with jax.named_scope("accumulate grad vmap"), hax.axis_mapping(
-            {Microbatch.name: ResourceAxis.DATA}, merge=True
-        ):
-            losses, grads = hax.vmap(accumulate_gradients, axis=Microbatch, unmapped_argnums=(0, 1))(f, model, *inputs)
-            grads = auto_sharded(grads)
+        def get_nth_microbatch(data, n):
+            return jax.tree_util.tree_map(lambda x: x[n], data)
 
-    # compute means and shard according to the parameter_axis_mapping
-    with jax.named_scope("reduce grads"), hax.axis_mapping(parameter_axis_mapping):
-        # losses and grads have Data leading axis
-        grads = hax.mean(grads, axis=Microbatch)
-        grads = auto_sharded(grads)
-        loss = jnp.mean(losses)
+    # third, we want to do compute. We use the for_i loop to do this, because somehow the reduce is breaking my brain
+    def loop(i, acc):
+        loss, grad = acc
 
-    return loss, grads
+        # get a microbatch of data
+        microbatch = get_nth_microbatch(inputs, i)
+        this_loss, this_grad = hax.vmap(f, axis=Microbatch, unmapped_argnums=0)(model, *microbatch)
+        this_loss = jnp.mean(this_loss)
+        this_grad = hax.mean(this_grad, Microbatch)
+
+        return this_loss + loss, jax.tree_map(jnp.add, grad, this_grad)
+
+    loss, grad = jax.lax.fori_loop(0, num_micro_steps, loop, (loss, grad))
+
+    return loss / num_micro_steps, jax.tree_map(lambda x: x / num_micro_steps, grad)
 
 
 # from https://github.com/google/jax/issues/4285
