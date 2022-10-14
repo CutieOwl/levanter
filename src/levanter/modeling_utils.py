@@ -104,22 +104,18 @@ def accumulate_gradients_sharded(
 
         inputs = jax.tree_util.tree_map(_reshape, inputs)
 
-        def get_nth_microbatch(data, n):
-            return jax.tree_util.tree_map(lambda x: x[n], data)
-
-    # third, we want to do compute. We use the for_i loop to do this, because somehow the reduce is breaking my brain
-    def loop(i, acc):
+    # third, we want to do compute.
+    def loop(acc, microbatch):
         loss, grad = acc
 
         # get a microbatch of data
-        microbatch = get_nth_microbatch(inputs, i)
         this_loss, this_grad = hax.vmap(f, axis=Microbatch, unmapped_argnums=0)(model, *microbatch)
         this_loss = jnp.mean(this_loss)
         this_grad = hax.mean(this_grad, Microbatch)
 
         return this_loss + loss, jax.tree_map(jnp.add, grad, this_grad)
 
-    loss, grad = jax.lax.fori_loop(0, num_micro_steps, loop, (loss, grad))
+    loss, grad = hax.reduce(loop, Microbatch, (loss, grad), inputs)
 
     return loss / num_micro_steps, jax.tree_map(lambda x: x / num_micro_steps, grad)
 
