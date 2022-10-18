@@ -84,7 +84,7 @@ def accumulate_gradients_sharded(
         compute_axis_mapping: a ResourceMapping for doing compute. The model should be sharded this way
         parameter_axis_mapping: a ResourceMapping for doing parameter updates. The model should be sharded this way
     """
-    # data comes in as (batch, ...), and we'll reshape to (data_axis_size, num_micro_steps, per_device_parallelism, ...)
+    # data comes in as (batch, ...), and we'll reshape to (data_axis_size, num_micro_steps, ...)
     batch_size = jnp.shape(inputs[0])[0]
     microbatch_size = data_axis_size * per_device_parallelism
     num_micro_steps = batch_size // microbatch_size
@@ -94,6 +94,7 @@ def accumulate_gradients_sharded(
     # first things first, we want a copy of our gradient sharded the same way as our model, along with a loss value
     loss = jnp.zeros(())
     grad = jax.tree_util.tree_map(jnp.zeros_like, model)
+
     with hax.axis_mapping(compute_axis_mapping, merge=False):
         # second, we want to reshape our data to (num_micro_steps, micro_batch_size, ...), sharded along the data axis
         with jax.named_scope("mass reshape"):
@@ -109,13 +110,15 @@ def accumulate_gradients_sharded(
         with hax.axis_mapping({Microbatch.name: ResourceAxis.DATA}, merge=True):
             # third, we want to do compute.
             def loop(acc, microbatch):
-                loss, grad = acc
+                with jax.named_scope("microbatch"):
+                    loss, grad = acc
 
-                this_loss, this_grad = hax.vmap(f, axis=Microbatch, unmapped_argnums=0)(model, *microbatch)
-                this_loss = jnp.mean(this_loss)
-                this_grad = hax.mean(this_grad, Microbatch)
+                    this_loss, this_grad = hax.vmap(f, axis=Microbatch, unmapped_argnums=0)(model, *microbatch)
 
-                return this_loss + loss, jax.tree_map(jnp.add, grad, this_grad)
+                    with jax.named_scope("accumulate"):
+                        this_loss = jnp.mean(this_loss)
+                        this_grad = hax.mean(this_grad, Microbatch)
+                        return this_loss + loss, jax.tree_map(jnp.add, grad, this_grad)
 
             loss, grad = hax.reduce(loop, Microbatch, (loss, grad), inputs)
 
