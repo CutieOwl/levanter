@@ -10,7 +10,7 @@ from jax.interpreters.pxla import PartitionSpec
 
 import haliax as hax
 from haliax import Axis
-from haliax.partitioning import ResourceAxis, ResourceMapping
+from haliax.partitioning import ResourceAxis, ResourceMapping, shard_with_axis_mapping
 from haliax.util import named_call
 from levanter.jax_utils import reduce
 
@@ -94,6 +94,7 @@ def accumulate_gradients_sharded(
     # first things first, we want a copy of our gradient sharded the same way as our model, along with a loss value
     loss = jnp.zeros(())
     grad = jax.tree_util.tree_map(jnp.zeros_like, model)
+    grad = shard_with_axis_mapping(grad, parameter_axis_mapping)
 
     with hax.axis_mapping(compute_axis_mapping, merge=False):
         # second, we want to reshape our data to (num_micro_steps, micro_batch_size, ...), sharded along the data axis
@@ -114,6 +115,7 @@ def accumulate_gradients_sharded(
                     loss, grad = acc
 
                     this_loss, this_grad = hax.vmap(f, axis=Microbatch, unmapped_argnums=0)(model, *microbatch)
+                    this_loss = with_sharding_constraint(this_loss, PartitionSpec(ResourceAxis.DATA))
 
                     with jax.named_scope("accumulate"):
                         this_loss = jnp.mean(this_loss)
