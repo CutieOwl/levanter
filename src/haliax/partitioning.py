@@ -351,4 +351,5 @@ __all__ = [
     "physical_axis_name",
     "pspec_for_axis",
     "round_axis_for_partitioning",
+    "shard_with_axis_mapping",
 ]
