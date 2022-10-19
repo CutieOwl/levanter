@@ -141,6 +141,69 @@ def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceM
     return jax.tree_util.tree_map(partition_spec, tree, is_leaf=is_named_array)
 
 
+class PjitWrapper:
+    def __init__(
+        self,
+        fn,
+        dynamic_fun,
+        donate_args,
+        donate_kwargs,
+        static_fun_def,
+        static_fun_leaves,
+        in_axis_resources,
+        out_axis_resources,
+        pjit_args,
+    ):
+        self._fn = fn
+        self._dynamic_fun = dynamic_fun
+        self._donate_args = donate_args
+        self._donate_kwargs = donate_kwargs
+        self._static_fun_def = static_fun_def
+        self._static_fun_leaves = static_fun_leaves
+        self._in_axis_resources = in_axis_resources
+        self._out_axis_resources = out_axis_resources
+        self._pjit_args = pjit_args
+
+    def __call__(self, *args, **kwargs):
+        return self._do_call(args, kwargs, is_lower=False)
+
+    def lower(self, *args, **kwargs):
+        return self._do_call(args, kwargs, is_lower=True)
+
+    def _do_call(self, args, kwargs, is_lower):
+        dynamic_argspec, static_argspec, static_arg_def = hashable_partition((args, kwargs), is_jax_array_like)
+        dynamic = (self._dynamic_fun, dynamic_argspec)
+
+        if self._donate_args is not None or self._donate_kwargs is not None:
+            dargs = self._donate_args or (False,) * len(args)
+            dkwargs = self._donate_kwargs or {k: False for k in kwargs}
+            dynamic_donated, dynamic_reserved = eqx.partition(dynamic, (False, (dargs, dkwargs)))
+        else:
+            dynamic_donated = jax.tree_util.tree_map(lambda _: None, dynamic)
+            dynamic_reserved = dynamic
+
+        static = (
+            self._static_fun_def,
+            self._static_fun_leaves,
+            static_arg_def,
+            static_argspec,
+        )
+
+        output_shape = _cached_filter_eval_shape(self._fn, *args, **kwargs)
+        in_resources = infer_resource_partitions((dynamic_donated, dynamic_reserved), self._in_axis_resources)
+        out_resources = infer_resource_partitions(output_shape, self._out_axis_resources)
+
+        my_pjit_args = dict(**self._pjit_args)
+        my_pjit_args["in_axis_resources"] = in_resources
+        my_pjit_args["out_axis_resources"] = out_resources
+        cached_pjitted_fun = _named_pjit_cache(get_fun_names(self._fn), **my_pjit_args)
+
+        if is_lower:
+            return cached_pjitted_fun.lower(dynamic_donated, dynamic_reserved, static)
+        else:
+            return cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
+
+
 def named_pjit(
     fn=None,
     axis_resources: Optional[ResourceMapping] = None,
@@ -202,38 +265,21 @@ def named_pjit(
 
     dynamic_fun, static_fun_leaves, static_fun_def = hashable_partition(fn, is_jax_array_like)
 
-    @functools.wraps(fn)
-    def f(*args, **kwargs):
-        dynamic_argspec, static_argspec, static_arg_def = hashable_partition((args, kwargs), is_jax_array_like)
-        dynamic = (dynamic_fun, dynamic_argspec)
+    wrapper = PjitWrapper(
+        fn,
+        dynamic_fun,
+        donate_args,
+        donate_kwargs,
+        static_fun_def,
+        static_fun_leaves,
+        in_axis_resources,
+        out_axis_resources,
+        pjit_args,
+    )
 
-        if donate_args is not None or donate_kwargs is not None:
-            dargs = donate_args or (False,) * len(args)
-            dkwargs = donate_kwargs or {k: False for k in kwargs}
-            dynamic_donated, dynamic_reserved = eqx.partition(dynamic, (False, (dargs, dkwargs)))
-        else:
-            dynamic_donated = jax.tree_util.tree_map(lambda _: None, dynamic)
-            dynamic_reserved = dynamic
+    wrapper = functools.update_wrapper(wrapper, fn)
 
-        static = (
-            static_fun_def,
-            static_fun_leaves,
-            static_arg_def,
-            static_argspec,
-        )
-
-        output_shape = _cached_filter_eval_shape(fn, *args, **kwargs)
-        in_resources = infer_resource_partitions((dynamic_donated, dynamic_reserved), in_axis_resources)
-        out_resources = infer_resource_partitions(output_shape, out_axis_resources)
-
-        my_pjit_args = dict(**pjit_args)
-        my_pjit_args["in_axis_resources"] = in_resources
-        my_pjit_args["out_axis_resources"] = out_resources
-        cached_pjitted_fun = _named_pjit_cache(get_fun_names(fn), **my_pjit_args)
-
-        return cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
-
-    return f
+    return wrapper
 
 
 # This is more or less copy-pasted from Equinox's similar functions (pmap, vmap, etc), but

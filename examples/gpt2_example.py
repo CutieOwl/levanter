@@ -254,6 +254,11 @@ def main(config: TrainGpt2Config):
                     my_key, training_key = jrandom.split(training_key, 2)
                     micro_keys = global_key_array(my_key, input_ids.shape[:-1], mesh, dataset.partition_spec[:-1])
 
+                if step == resume_step:
+                    with open("train_step_hlo", "w") as f:
+                        text = train_step.lower(model, opt_state, input_ids, micro_keys).as_text()  # type: ignore
+                        f.write(text)
+
                 step_loss, model, opt_state = simplify_gdas(train_step(model, opt_state, input_ids, micro_keys))
                 step_loss = jnp.mean(step_loss).item()
 
