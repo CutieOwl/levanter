@@ -32,6 +32,7 @@ class Gpt2Config:
     attn_pdrop: float = 0.1
     layer_norm_epsilon: float = 1e-5
     activation_function: str = "gelu_new"
+    token_pdrop: float = 0.0  # probability of zeroing out the entire embedding vector for a token
 
     # mistral tweaks:
     scale_attn_by_inverse_layer_idx: bool = False
@@ -354,6 +355,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
     position_embeddings: NamedArray
     token_out_embeddings: Optional[NamedArray]
     dropout: hnn.Dropout
+    token_dropout: hnn.Dropout
 
     # axes
     Vocab: Axis = eqx.static_field()
@@ -368,6 +370,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         initializer_range: float,
         tie_word_embeddings: bool,
         dropout_prob: float,
+        token_dropout_prob: float,
         *,
         key,
     ):
@@ -381,6 +384,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         self.token_embeddings = hax.random.normal(key=k_wte, shape=(Vocab, Embed)) * initializer_range
         self.position_embeddings = hax.random.normal(key=k_wpe, shape=(SeqLen, Embed)) * (initializer_range / 2)
         self.dropout = hnn.Dropout(pdrop=dropout_prob)
+        self.token_dropout = hnn.Dropout(pdrop=token_dropout_prob, broadcast_axes=Embed)
 
         if tie_word_embeddings:
             self.token_out_embeddings = None
@@ -389,7 +393,10 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
 
     @named_call
     def embed(self, input_ids, inference, *, key):
+        token_drop, key = hax.jax_utils.maybe_rng_split(key, 2)
         input_embeds = self.token_embeddings.take(self.Vocab, input_ids)
+        input_embeds = self.token_dropout(input_embeds, inference=inference, key=token_drop)
+
         position_embeds = self.position_embeddings
 
         hidden_states = input_embeds + position_embeds
@@ -436,6 +443,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             initializer_range=config.initializer_range,
             tie_word_embeddings=True,
             dropout_prob=config.embed_pdrop,
+            token_dropout_prob=config.token_pdrop,
             key=k_embeddings,
         )
 
