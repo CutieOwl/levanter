@@ -318,23 +318,26 @@ some Jax/Haliax idioms.
         *,
         key,
         causal: bool = True,
-    ):
-        self.Heads = Heads
-        self.HeadDim = HeadDim
-        self.SeqLen = SeqLen
-        self.Qkv = Axis("qkv", 3)
-        self.KeySeqLen = SeqLen.alias("key_" + SeqLen.name)
+):
 
-        k_c, k_proj = jrandom.split(key, 2)  # splitting random keys is how you get different random numbers from different calls
-        # Haliax's Linear allows you to specify multiple input and output axes, and it will do the right thing
-        # I find this clearer than the reshape heavy code you usually see
-        self.c_attn = hnn.Linear(In=InDim, Out=(self.Qkv, self.Heads, self.HeadDim), key=k_c)
-        self.c_proj = hnn.Linear(In=(self.Heads, self.HeadDim), Out=InDim, key=k_proj)
-        self.dropout = hnn.Dropout(dropout_prob)
 
-        self.causal = causal
-        self.scale_by_inverse_layer_idx = scale_by_inverse_layer_idx
-        self.upcast = upcast
+    self.Heads = Heads
+self.HeadDim = HeadDim
+self.SeqLen = SeqLen
+self.Qkv = Axis("qkv", 3)
+self.KeySeqLen = SeqLen.alias("key_" + SeqLen.name)
+
+k_c, k_proj = jrandom.split(key,
+                            2)  # splitting random keys is how you get different random numbers from different calls
+# Haliax's Linear allows you to specify multiple input and output axes, and it will do the right thing
+# I find this clearer than the reshape heavy code you usually see
+self.embed_to_qkv_heads = hnn.Linear(In=InDim, Out=(self.Qkv, self.Heads, self.HeadDim), key=k_c)
+self.hidden_to_embed = hnn.Linear(In=(self.Heads, self.HeadDim), Out=InDim, key=k_proj)
+self.dropout = hnn.Dropout(dropout_prob)
+
+self.causal = causal
+self.scale_by_inverse_layer_idx = scale_by_inverse_layer_idx
+self.upcast = upcast
 ```
 
 The basic flow of multi-headed attention in a standard transformer is:
@@ -349,7 +352,7 @@ Let's see how this looks in Haliax:
 ```python
 def __call__(self, hidden_states: NamedArray, layer_idx, inference: bool = True, *, key):
     # 1. Project the input to [seqlen, heads, head_dim]
-    qkv_out = self.c_attn(hidden_states)
+    qkv_out = self.embed_to_qkv_heads(hidden_states)
     q, k, v = qkv_out.unbind(self.Qkv)
 
     # Rename k and v's SeqLen as haliax doesn't support unnamed axes or duplicate axes
@@ -384,7 +387,7 @@ def __call__(self, hidden_states: NamedArray, layer_idx, inference: bool = True,
     attn_output = hax.dot(self.KeySeqLen, attn_weights, v)  # [heads, seq_len, head_dim]
 
     # 5. project the attention output back to the original input dimension
-    attn_output = self.c_proj(attn_output)
+    attn_output = self.hidden_to_embed(attn_output)
     return attn_output
 ```
 

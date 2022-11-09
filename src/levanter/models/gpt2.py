@@ -67,28 +67,36 @@ class Gpt2Config:
         return Axis(name="head", size=self.hidden_dim // self.num_heads)
 
 
-class Gpt2Mlp(eqx.Module):
+class Gpt2Mlp(eqx.Module, TorchSerializationMixin):
     act: Callable = eqx.static_field()
-    c_fc: hnn.Linear  # projection from Embed to Intermediate (typically 4x Embed)
-    c_proj: hnn.Linear  # projection from Intermediate to Embed
+    # Hidden is typically 4x Embed
+    embed_to_hidden: hnn.Linear  # called c_fc in the standard implementation/HF
+    hidden_to_embed: hnn.Linear  # called c_proj
 
-    def __init__(self, Embed: Axis, Intermediate: Axis, activation_fn, *, key):
-        k_fc, k_proj = jrandom.split(key, 2)
-        self.c_fc = hnn.Linear(Out=Intermediate, In=Embed, key=k_fc)
-        self.c_proj = hnn.Linear(Out=Embed, In=Intermediate, key=k_proj)
+    def __init__(self, Embed: Axis, Mlp: Axis, activation_fn, *, key):
+        k_up, k_down = jrandom.split(key, 2)
+        self.embed_to_hidden = hnn.Linear(Out=Mlp, In=Embed, key=k_up)
+        self.hidden_to_embed = hnn.Linear(Out=Embed, In=Mlp, key=k_down)
         self.act = ACT2FN[activation_fn]  # type: ignore
 
     @named_call
     def __call__(self, hidden_states: NamedArray):
-        hidden_states = self.c_fc(hidden_states)
+        hidden_states = self.embed_to_hidden(hidden_states)
         hidden_states = jax.tree_util.tree_map(self.act, hidden_states)
-        hidden_states = self.c_proj(hidden_states)
+        hidden_states = self.hidden_to_embed(hidden_states)
         return hidden_states
+
+    def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
+        return {
+            # the names in the standard implementations are pretty bad
+            "embed_to_hidden": "c_fc",
+            "hidden_to_embed": "c_proj",
+        }
 
 
 class Gpt2Attention(TorchSerializationMixin, eqx.Module):
-    c_attn: hnn.Linear  # input projection from [embed] -> [(q, k, v), heads, head_dim]
-    c_proj: hnn.Linear  # output projection from [heads, head_dim] -> [embed]
+    embed_to_qkv_heads: hnn.Linear  # input projection from [embed] -> [(q, k, v), heads, head_dim], called c_attn
+    heads_to_embed: hnn.Linear  # output projection from [heads, head_dim] -> [embed], called c_proj
     dropout: hnn.Dropout
 
     SeqLen: Axis = eqx.static_field()
@@ -121,8 +129,8 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
         self.KeySeqLen = KeySeqLen
 
         k_c, k_proj = jrandom.split(key, 2)
-        self.c_attn = hnn.Linear(In=Embed, Out=(self.Qkv, self.Heads, self.HeadDim), key=k_c)
-        self.c_proj = hnn.Linear(In=(self.Heads, self.HeadDim), Out=Embed, key=k_proj)
+        self.embed_to_qkv_heads = hnn.Linear(In=Embed, Out=(self.Qkv, self.Heads, self.HeadDim), key=k_c)
+        self.heads_to_embed = hnn.Linear(In=(self.Heads, self.HeadDim), Out=Embed, key=k_proj)
         self.dropout = hnn.Dropout(dropout_prob)
 
         self.scale_by_inverse_layer_idx = scale_by_inverse_layer_idx
@@ -132,7 +140,7 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
     def __call__(
         self, hidden_states: NamedArray, mask: Optional[NamedArray], layer_idx, inference: bool = True, *, key
     ):
-        qkv_out = self.c_attn(hidden_states)
+        qkv_out = self.embed_to_qkv_heads(hidden_states)
         q, k, v = qkv_out.unbind(self.Qkv)
 
         # Rename k and v's SeqLen as haliax doesn't support unnamed axes or duplicate axes
@@ -162,7 +170,7 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
 
         attn_output = hax.dot(self.KeySeqLen, attn_weights, v)  # [heads, seq_len, head_dim]
 
-        attn_output = self.c_proj(attn_output)
+        attn_output = self.heads_to_embed(attn_output)
         return attn_output
 
     def from_torch_dict(self, torch_dict: StateDict, prefix: Optional[str] = None) -> "Gpt2Attention":
@@ -171,7 +179,7 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
         # so we need to reshape the one in the dict before forwarding to the linear
         # keep in mind that everything is vectorized in our implementation, so there's a leading num_layers dim
 
-        es = cast(Axis, self.c_attn.In).size
+        es = cast(Axis, self.embed_to_qkv_heads.In).size
         d = {}
         d.update(
             reshape_linear_layer(
@@ -192,7 +200,7 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
         my_dict: StateDict = {}
         super().update_torch_dict(my_dict, prefix)
 
-        es = cast(Axis, self.c_attn.In).size
+        es = cast(Axis, self.embed_to_qkv_heads.In).size
         my_dict.update(
             reshape_linear_layer(
                 my_dict, apply_prefix(prefix, "c_attn"), (es,), (3 * self.Heads.size * self.HeadDim.size,)
@@ -206,6 +214,12 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
 
         torch_dict.update(my_dict)
         return torch_dict
+
+    def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
+        return {
+            "embed_to_qkv_heads": "c_attn",
+            "heads_to_embed": "c_proj",
+        }
 
 
 class Gpt2Block(TorchSerializationMixin, eqx.Module):
@@ -239,7 +253,7 @@ class Gpt2Block(TorchSerializationMixin, eqx.Module):
 
         self.mlp = Gpt2Mlp(
             Embed=config.Embed,
-            Intermediate=config.Mlp,
+            Mlp=config.Mlp,
             activation_fn=config.activation_function,
             key=k_mlp,
         )
