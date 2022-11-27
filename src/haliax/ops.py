@@ -83,7 +83,6 @@ def triu(array: NamedArray, axis1: Axis, axis2: Axis, k=0) -> NamedArray:
 def isclose(a: NamedArray, b: NamedArray, rtol=1e-05, atol=1e-08, equal_nan=False) -> NamedArray:
     """Returns a boolean array where two arrays are element-wise equal within a tolerance."""
     a, b = broadcast_arrays(a, b)
-    # TODO: numpy supports an array atol and rtol, but we don't yet
     return NamedArray(jnp.isclose(a.array, b.array, rtol=rtol, atol=atol, equal_nan=equal_nan), a.axes)
 
 
