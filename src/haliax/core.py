@@ -92,7 +92,7 @@ class NamedArray:
             raise ValueError(f"Expected scalar, got {self.array.ndim}-dimensional array")
         return self.array
 
-    # shape = property(lambda self: self.array.shape)
+    shape = property(lambda self: self.array.shape)
     dtype = property(lambda self: self.array.dtype)
     ndim = property(lambda self: self.array.ndim)
     size = property(lambda self: self.array.size)

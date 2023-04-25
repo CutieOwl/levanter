@@ -1,0 +1,34 @@
+data:
+  train_urls:
+      - "/nlp/scr/jthickstun/anticipation/datasets/arrival/train.txt"
+  validation_urls:
+      - "/nlp/scr/jthickstun/anticipation/datasets/arrival/valid.txt"
+  cache_dir: "/nlp/scr/kathli/cache/"
+  tokenizer: "passthrough"
+  plaintext: True
+  enforce_eos: False
+model:
+  hidden_dim: 32
+  num_heads: 4
+  num_layers: 2
+  seq_len: 1024
+  scale_attn_by_inverse_layer_idx: true
+trainer:
+  mp: f32
+  learning_rate: 6E-4
+  warmup_ratio: 0.05
+  weight_decay: 0.1
+  model_axis_size: 1
+  num_train_steps: 5000
+  per_device_parallelism: 2
+
+  checkpointer:
+    base_path: nlp/scr/kathli/lakh-checkpoints
+    keep:
+       - every: 1000
+
+  axis_resources:
+    batch: "data"
+    vocab: "model"
+    mlp: "model"
+    heads: "model"

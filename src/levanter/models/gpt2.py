@@ -464,7 +464,15 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             raise ValueError("key must be provided for training")
 
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
+        print(input_ids.size)
+        print(input_ids.shape)
         hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
+        # print(triple_hidden_states.size)
+        # print(triple_hidden_states.shape)
+        # hidden_states = triple_hidden_states[1::3] + triple_hidden_states[2::3] + triple_hidden_states[3::3]
+        # hidden_states = jnp.concatenate(([triple_hidden_states[0]], hidden_states))
+        print(hidden_states.size)
+        print(hidden_states.shape)
         hidden_states = self.transformer(hidden_states, attn_mask, inference=inference, key=k_transformer)
         lm_logits = self.embeddings.unembed(hidden_states)
 
