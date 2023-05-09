@@ -1,0 +1,29 @@
+data:
+  train_urls:
+      - "/nlp/scr/jthickstun/anticipation/datasets/arrival/train.txt"
+  validation_urls:
+      - "/nlp/scr/jthickstun/anticipation/datasets/arrival/valid-small.txt"
+  cache_dir: "/nlp/scr/kathli/cache/"
+  tokenizer: "passthrough"
+  plaintext: True
+  enforce_eos: False
+model:
+  hidden_dim: 256
+  num_heads: 8
+  num_layers: 4
+  seq_len: 512
+trainer:
+  mp: f32
+  num_train_steps: 20000
+
+  checkpointer:
+    save_interval: 30m
+
+  per_device_eval_parallelism: 2
+  per_device_parallelism: 2
+  train_batch_size: 512
+  axis_resources:
+    batch: "data"
+    vocab: "model"
+    mlp: "model"
+    heads: "model"
