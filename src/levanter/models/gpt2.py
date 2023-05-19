@@ -502,56 +502,94 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         if not inference and key is None:
             raise ValueError("key must be provided for training")
 
-
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
 
+        #print("inference", inference)
+        #print("key", key)
+        #print("k_transformer", k_transformer)
+
         hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
+        seq_len = self.embeddings.SeqLen.size
+        note_seq_len = int((seq_len + 2) / 3)
+
+        note_SeqLen = Axis("seqlen", note_seq_len)
+        note_KeySeqLen = note_SeqLen.alias(f"key_{note_SeqLen.name}")
+
+        Triple = Axis("triple", 3)
+
+        # create reshaped hidden_states of 342 x 3 x d
+        hidden_states_raw = hidden_states.array
+        start_token = hidden_states_raw[:,0,:]
+        hidden_states_raw = jnp.concatenate((start_token[:,None,:],start_token[:,None,:], hidden_states_raw), axis=1)
+        #print("hidden_states_raw shape", hidden_states_raw.shape)
+        batch = hidden_states_raw.shape[0]
+        dim = hidden_states_raw.shape[2]
+        new_axes = (hidden_states.axes[0], note_SeqLen, Triple, hidden_states.axes[2])
+        reshaped_hs = NamedArray(jnp.reshape(hidden_states_raw, (batch, note_seq_len, 3, dim)), new_axes)
+        #print("reshaped_hs shape", reshaped_hs.shape)
+        #print("reshaped_hs axes", reshaped_hs.axes)
+        #print("reshaped_hs array shape", reshaped_hs.array.shape)
+        
+        # create attention mask for triple transformer
+        KeyTriple = Triple.alias(f"key_{Triple.name}")
+        triple_attn_mask = hax.nn.attention.causal_mask(Triple, KeyTriple)
+
+        # fan in
         note_embeds = [hidden_states.take(self.embeddings.SeqLen, 0)]
         for i in range(1, self.embeddings.SeqLen.size, 3):
             take0 = hidden_states.take(self.embeddings.SeqLen, i)
             take1 = hidden_states.take(self.embeddings.SeqLen, i + 1) 
             take2 = hidden_states.take(self.embeddings.SeqLen, i + 2)
             note_embeds.append(take0 + take1 + take2)
-
-        # print("Sum shape", note_embeds[0].shape)
-        # print("Sum axes", note_embeds[0].axes)
-        
-        note_seq_len = len(note_embeds)
-        note_SeqLen = Axis("seqlen", note_seq_len)
-        note_KeySeqLen = note_SeqLen.alias(f"key_{note_SeqLen.name}")
-
+        #print("Sum shape", note_embeds[0].shape)
+        #print("Sum axes", note_embeds[0].axes)
+        # note_hidden_states replaces hidden_states and has sequence length 342 instead of 1024 
         note_hidden_states = hax.stack(note_SeqLen, note_embeds)
-        # print("note hidden states shape", note_hidden_states.shape)
-        # print("note hidden states axis", note_hidden_states.axes)
+        #print("note hidden states shape", note_hidden_states.shape)
+        #print("note hidden states axis", note_hidden_states.axes)
         note_hidden_states = note_hidden_states.rearrange([note_hidden_states.axes[1], note_hidden_states.axes[0], note_hidden_states.axes[2]])
-        # print("new note hidden states shape", note_hidden_states.shape)
-        # print("new note hidden states axis", note_hidden_states.axes)
-
+        #print("new note hidden states shape", note_hidden_states.shape)
+        #print("new note hidden states axis", note_hidden_states.axes)
         note_attn_mask = hax.nn.attention.causal_mask(note_SeqLen, note_KeySeqLen)
         # NOTE: the above attention mask does not do forgetful casual masking, even if that parameter was specified in the original config!
 
-        # hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) # self.transformer(note_hidden_states, attn_mask, inference=inference, key=k_transformer)
-        hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) # self.transformer(note_hidden_states, attn_mask, inference=inference, key=k_transformer)
-        # print("Successfully called transformer")
-        # print("Hidden states after transformer ", hidden_states)
-        lm_logits_0 = self.embeddings.unembed_0(hidden_states)
-        lm_logits_1 = self.embeddings.unembed_1(hidden_states)
-        lm_logits_2 = self.embeddings.unembed_2(hidden_states)
-        # print("lm logits_0", lm_logits_0)
-        # print("lm logits_1", lm_logits_1)
-        # print("lm logits_2", lm_logits_2)
-        logit_slices = []
-        for i in range(note_seq_len):
-            take0 = lm_logits_0.take(note_SeqLen, i)
-            take1 = lm_logits_1.take(note_SeqLen, i) 
-            take2 = lm_logits_2.take(note_SeqLen, i)
-            logit_slices.append(take0)
-            logit_slices.append(take1)
-            logit_slices.append(take2)
+        # call the transformer on note_hidden_states instead of hidden_states
+        note_hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer)
+        # hidden_states now has shape 342 x d.
+        #print("Successfully called transformer")
+        #print("Hidden states after transformer ", hidden_states)
 
-        # NOTE: ignore the last 2 because 342 * 3 = 1026 > 1024
-        lm_logits = hax.stack(self.embeddings.SeqLen, logit_slices[:-2])
-        # print("lm_logits", lm_logits)
+        # also call a transformer on the triple
+        triple_transf = []
+        for i in range(note_seq_len):
+            takei = reshaped_hs.take(note_SeqLen, i)
+            transfi = self.transformer(takei, triple_attn_mask, inference=inference, key=k_transformer)
+            triple_transf.append(transfi)
+        #print("triple_transf[0] shape", triple_transf[0].shape)
+        #print("triple_transf[0] axes", triple_transf[0].axes)
+        triple_hidden_states = hax.stack(note_SeqLen, triple_transf)
+        #print("triple_hidden_states shape", triple_hidden_states)
+        #print("triple_hidden_states axes", triple_hidden_states)
+        # reshaped_hs should have shape 342 x 3 x d.
+
+        combined_hs = note_hidden_states + triple_hidden_states # use broadcasting to combine
+        # combined_hs has axes batch, note_seqlen, triple, embed
+        # hidden_states has shape 342 x d and reshaped_hs has shape 342x3xd so combined_hs should have shape 342 x 3 x d
+
+        #print("combined_hs shape", combined_hs.shape)
+        #print("combined_hs axes", combined_hs.axes)
+
+        new_axes = (hidden_states.axes[0], self.embeddings.SeqLen, hidden_states.axes[2])
+        jnp_reshaped = jnp.reshape(combined_hs.array, (batch, note_seq_len * 3, dim))
+        #print("jnp_reshaped shape", jnp_reshaped.shape)
+        without_last2 = jnp_reshaped[:,:-2,:]
+        #print("without_last2 shape", without_last2)
+        combined_hs = NamedArray(without_last2, new_axes)
+        #combined_hs = combined_hs.reshape(1026, d) # combine the 1st and 2nd axes of combined_hs to get shape 1026 x d
+        #combined_hs = combined_hs[:-2] # ignore the last two so we get shape 1024xd
+
+        lm_logits = self.embeddings.unembed(combined_hs)
+        #print("lm_logits", lm_logits)
 
         return lm_logits
 
