@@ -494,21 +494,17 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             dropout_prob=config.embed_pdrop,
             key=k_embeddings,
         )
-        seq_len = self.embeddings.SeqLen.size
-        note_seq_len = int((seq_len + 2) / 3)
-        note_SeqLen = Axis("seqlen", note_seq_len)
-        Mlp1_axis = Axis(name="mlp1", size=note_seq_len * 4) # for now MLP dim is note_seq_len * 4
-        self.mlp1 = Gpt2Mlp(Embed=note_SeqLen, 
-                            Intermediate=Mlp1_axis, 
+        MlpIntermediate = Axis(name="mlp", size=config.hidden_dim) # in this case the intermediate dimension of the MLP will be 512, same as hidden_dim
+        self.mlp1 = Gpt2Mlp(Embed=config.Embed, 
+                            Intermediate=MlpIntermediate, 
                             activation_fn=config.activation_function,
                             key=k_mlp1, 
                             use_bias=config.use_bias)
-        z2_SeqLen = Axis("seqlen", note_seq_len * 2)
-        Mlp2_axis = Axis(name="mlp2", size=note_seq_len * 2 * 4)
+        z2_Embed = Axis(name="embed", size=config.hidden_dim * 2)
         # use an asymmetrical MLP for MLP2 to transform from seq of 684 to 342
-        self.mlp2 = AsymmMlp(Embed=z2_SeqLen, 
-                            Intermediate=Mlp2_axis, 
-                            Out=note_SeqLen,
+        self.mlp2 = AsymmMlp(Embed=z2_Embed, 
+                            Intermediate=MlpIntermediate, 
+                            Out=config.Embed,
                             activation_fn=config.activation_function,
                             key=k_mlp2,
                             use_bias=config.use_bias)
@@ -528,6 +524,8 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         note_seq_len = int((seq_len + 2) / 3)
         note_SeqLen = Axis("seqlen", note_seq_len)
         note_KeySeqLen = note_SeqLen.alias(f"key_{note_SeqLen.name}")
+        batch = hidden_states.array.shape[0]
+        dim = hidden_states.array.shape[2]
         
         # fan in
         start_token = hidden_states.take(self.embeddings.SeqLen, 0)
@@ -551,11 +549,16 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         # z1_states has shape 8,342,512
         #print("z1_states shape", z1_states.shape)
         #print("z1_states axes", z1_states.axes)
-        # Note that z1_states is actually using t0 + t1 here because we want to feed both triple[0] and triple[1] to prediction for triple[2]
-        z2_SeqLen = Axis("seqlen", note_seq_len * 2)
-        z2_states = hax.stack(z2_SeqLen, t0 + t1) # note that the + is array concatenation, not element-wise!
-        z2_states = z2_states.rearrange([z2_states.axes[1], z2_states.axes[0], z2_states.axes[2]])
-        # z2_states has shape 8,684,512
+        
+        t1_states = hax.stack(note_SeqLen, t1)
+        t1_states = t1_states.rearrange([z1_states.axes[1], z1_states.axes[0], z1_states.axes[2]])
+        t0_t1_states = [z1_states, t1_states]
+        Two = Axis("two", 2)
+        # Note that z1_states is actually using t0_t1 here because we want to feed both triple[0] and triple[1] to prediction for triple[2]
+        z2_states = hax.stack(Two, t0_t1_states)
+        z2_Embed = Axis("embed", dim * 2)
+        z2_states = z2_states.flatten_axes([self.config.Embed, Two], z2_Embed)
+        # z2_states has shape 8,342,1024
         #print("z2_states shape", z2_states.shape)
         #print("z2_states axes", z2_states.axes)
         note_attn_mask = hax.nn.attention.causal_mask(note_SeqLen, note_KeySeqLen)
@@ -584,9 +587,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         combined_states = [note_hidden_states, note_hidden_states + z1_states, note_hidden_states + z2_states]
         pre_unembed = hax.stack(Triple, combined_states)
 
-        new_axes = (hidden_states.axes[0], self.embeddings.SeqLen, hidden_states.axes[2])
-        batch = hidden_states.array.shape[0]
-        dim = hidden_states.array.shape[2]
+        new_axes = (hidden_states.axes[0], self.embeddings.SeqLen, self.config.Embed)
         jnp_reshaped = jnp.reshape(pre_unembed.array, (batch, note_seq_len * 3, dim))
         #print("jnp_reshaped shape", jnp_reshaped.shape)
         without_last2 = jnp_reshaped[:,:-2,:]
