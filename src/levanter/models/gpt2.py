@@ -403,6 +403,10 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
     token_embeddings: NamedArray
     position_embeddings: NamedArray
     token_out_embeddings: Optional[NamedArray]
+    # NOTE: created three new output embedding arrays 
+    token_out_embeddings_0: Optional[NamedArray]
+    token_out_embeddings_1: Optional[NamedArray]
+    token_out_embeddings_2: Optional[NamedArray]
     dropout: hnn.Dropout
 
     # axes
@@ -417,6 +421,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         SeqLen: Axis,
         initializer_range: float,
         tie_word_embeddings: bool,
+        use_three_out_embeddings: bool, # NOTE: a new variable for if we are using 3 output embeddings 
         dropout_prob: float,
         *,
         key,
@@ -429,6 +434,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         self.Embed = Embed
 
         self.token_embeddings = sharded_normal(key=k_wte, shape=(Vocab, Embed)) * initializer_range
+
         self.position_embeddings = sharded_normal(key=k_wpe, shape=(SeqLen, Embed)) * (initializer_range / 2)
         self.dropout = hnn.Dropout(pdrop=dropout_prob)
 
@@ -436,6 +442,15 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
             self.token_out_embeddings = None
         else:
             self.token_out_embeddings = sharded_normal(key=k_out, shape=(Vocab, Embed)) * initializer_range
+
+        if use_three_out_embeddings:
+            self.token_out_embeddings_0 = sharded_normal(key=k_out, shape=(Vocab, Embed)) * initializer_range
+            self.token_out_embeddings_1 = sharded_normal(key=k_out, shape=(Vocab, Embed)) * initializer_range
+            self.token_out_embeddings_2 = sharded_normal(key=k_out, shape=(Vocab, Embed)) * initializer_range
+        else:
+            self.token_out_embeddings_0 = None
+            self.token_out_embeddings_1 = None
+            self.token_out_embeddings_2 = None
 
     @named_call
     def embed(self, input_ids, inference, *, key):
@@ -448,8 +463,25 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         return hidden_states
 
     def unembed(self, hidden_states: NamedArray):
-        embeddings = self.token_out_embeddings or self.token_embeddings
+        if self.token_out_embeddings is not None:
+            embeddings = self.token_out_embeddings
+        else:
+            embeddings = self.token_embeddings
+        # NOTE: I was having issues with the following boolean statement so I changed it to the above code
+        # embeddings = self.token_out_embeddings or self.token_embeddings
         return hax.dot(self.Embed, hidden_states, embeddings)
+
+    def unembed_0(self, hidden_states: NamedArray):
+        assert self.token_out_embeddings_0 is not None
+        return hax.dot(self.Embed, hidden_states, self.token_out_embeddings_0)  
+
+    def unembed_1(self, hidden_states: NamedArray):
+        assert self.token_out_embeddings_1 is not None
+        return hax.dot(self.Embed, hidden_states, self.token_out_embeddings_1)   
+
+    def unembed_2(self, hidden_states: NamedArray):
+        assert self.token_out_embeddings_2 is not None
+        return hax.dot(self.Embed, hidden_states, self.token_out_embeddings_2)
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
         assert self.token_out_embeddings is None
@@ -490,7 +522,8 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             Embed=config.Embed,
             SeqLen=config.SeqLen,
             initializer_range=config.initializer_range,
-            tie_word_embeddings=True,
+            tie_word_embeddings=True, 
+            use_three_out_embeddings=False,
             dropout_prob=config.embed_pdrop,
             key=k_embeddings,
         )
@@ -501,7 +534,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
                             key=k_mlp1, 
                             use_bias=config.use_bias)
         z2_Embed = Axis(name="embed", size=config.hidden_dim * 2)
-        # use an asymmetrical MLP for MLP2 to transform from seq of 684 to 342
+        # use an asymmetrical MLP for MLP2 to transform from seq of 1024 to 512
         self.mlp2 = AsymmMlp(Embed=z2_Embed, 
                             Intermediate=MlpIntermediate, 
                             Out=config.Embed,
@@ -512,6 +545,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
     def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key):
         if not inference and key is None:
             raise ValueError("key must be provided for training")
+
 
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
 
@@ -526,7 +560,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         note_KeySeqLen = note_SeqLen.alias(f"key_{note_SeqLen.name}")
         batch = hidden_states.array.shape[0]
         dim = hidden_states.array.shape[2]
-        
+
         # fan in
         start_token = hidden_states.take(self.embeddings.SeqLen, 0)
         note_embeds = [start_token]
@@ -540,16 +574,13 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             t0.append(take0)
             t1.append(take1)
         # note_hidden_states replaces hidden_states and has sequence length 342 instead of 1024 
-        note_hidden_states = hax.stack(note_SeqLen, note_embeds)
-        note_hidden_states = note_hidden_states.rearrange([note_hidden_states.axes[1], note_hidden_states.axes[0], note_hidden_states.axes[2]])
-        #print("new note hidden states shape", note_hidden_states.shape)
-        #print("new note hidden states axis", note_hidden_states.axes)
+
         z1_states = hax.stack(note_SeqLen, t0)
         z1_states = z1_states.rearrange([z1_states.axes[1], z1_states.axes[0], z1_states.axes[2]])
         # z1_states has shape 8,342,512
         #print("z1_states shape", z1_states.shape)
         #print("z1_states axes", z1_states.axes)
-        
+
         t1_states = hax.stack(note_SeqLen, t1)
         t1_states = t1_states.rearrange([z1_states.axes[1], z1_states.axes[0], z1_states.axes[2]])
         t0_t1_states = [z1_states, t1_states]
@@ -561,15 +592,20 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         # z2_states has shape 8,342,1024
         #print("z2_states shape", z2_states.shape)
         #print("z2_states axes", z2_states.axes)
+
+        note_hidden_states = hax.stack(note_SeqLen, note_embeds)
+        # print("note hidden states shape", note_hidden_states.shape)
+        # print("note hidden states axis", note_hidden_states.axes)
+        note_hidden_states = note_hidden_states.rearrange([note_hidden_states.axes[1], note_hidden_states.axes[0], note_hidden_states.axes[2]])
+        # print("new note hidden states shape", note_hidden_states.shape)
+        # print("new note hidden states axis", note_hidden_states.axes)
+
         note_attn_mask = hax.nn.attention.causal_mask(note_SeqLen, note_KeySeqLen)
         # NOTE: the above attention mask does not do forgetful casual masking, even if that parameter was specified in the original config!
 
-        # call the transformer on note_hidden_states instead of hidden_states
-        note_hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer)
-        # hidden_states now has shape 342 x d.
-        #print("note_hidden_states shape", note_hidden_states.shape)
-        #print("note_hidden_states axes", note_hidden_states.axes)
-
+        # hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) # self.transformer(note_hidden_states, attn_mask, inference=inference, key=k_transformer)
+        note_hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) # self.transformer(note_hidden_states, attn_mask, inference=inference, key=k_transformer)
+        
         # z0, the conditional information that gets added to the first index of the triple, is the 0 vector and is trivial. 
         # z1 is a simple MLP on t_0.
         #print("activation function ", self.config.activation_function)
@@ -583,20 +619,20 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         #print("z_2 shape", z2_states.shape)
         #print("z_2 axes", z2_states.axes)
 
-        Triple = Axis("triple", 3)
-        combined_states = [note_hidden_states, note_hidden_states + z1_states, note_hidden_states + z2_states]
-        pre_unembed = hax.stack(Triple, combined_states)
+        lm_logits_0 = self.embeddings.unembed(note_hidden_states)
+        lm_logits_1 = self.embeddings.unembed(note_hidden_states + z1_states)
+        lm_logits_2 = self.embeddings.unembed(note_hidden_states + z2_states)
+        logit_slices = []
+        for i in range(note_seq_len):
+            take0 = lm_logits_0.take(note_SeqLen, i)
+            take1 = lm_logits_1.take(note_SeqLen, i) 
+            take2 = lm_logits_2.take(note_SeqLen, i)
+            logit_slices.append(take0)
+            logit_slices.append(take1)
+            logit_slices.append(take2)
 
-        new_axes = (hidden_states.axes[0], self.embeddings.SeqLen, self.config.Embed)
-        jnp_reshaped = jnp.reshape(pre_unembed.array, (batch, note_seq_len * 3, dim))
-        #print("jnp_reshaped shape", jnp_reshaped.shape)
-        without_last2 = jnp_reshaped[:,:-2,:]
-        #print("without_last2 shape", without_last2.shape)
-        pre_unembed = NamedArray(without_last2, new_axes)
-
-        lm_logits = self.embeddings.unembed(pre_unembed)
-        #print("lm_logits shape", lm_logits.shape)
-        #print("lm_logits axes", lm_logits.axes)
+        # NOTE: ignore the last 2 because 342 * 3 = 1026 > 1024
+        lm_logits = hax.stack(self.embeddings.SeqLen, logit_slices[:-2])
 
         return lm_logits
 
