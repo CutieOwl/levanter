@@ -174,15 +174,9 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
         qkv_out = self.c_attn(hidden_states)
         q, k, v = qkv_out.unbind(self.Qkv)
 
-        # NOTE: Since we don't have a variable for note_SeqLen, I'm just retrieving it from hidden_states' axes
-        note_SeqLen = hidden_states.axes[1]
-        note_KeySeqLen = note_KeySeqLen = note_SeqLen.alias(f"key_{note_SeqLen.name}")
-        # print("note_SeqLen, ", note_SeqLen)
-        # print("note_KeySeqLen ", note_KeySeqLen)
-
         # Rename k and v's SeqLen as haliax doesn't support unnamed axes or duplicate axes
-        k = k.rename({note_SeqLen: note_KeySeqLen})
-        v = v.rename({note_SeqLen: note_KeySeqLen})
+        k = k.rename({self.SeqLen: self.KeySeqLen})
+        v = v.rename({self.SeqLen: self.KeySeqLen})
 
         # mistral tweak: scale norms by 1/sqrt(layer_idx) to prevent blowup
         scale = jax.lax.rsqrt(float(self.HeadDim.size))
@@ -202,10 +196,10 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
         if mask is not None:
             attn_scores = attn_scores + (1.0 - mask) * -1e9
 
-        attn_weights = hnn.softmax(attn_scores, axis=note_KeySeqLen).astype(hidden_states.dtype)
+        attn_weights = hnn.softmax(attn_scores, axis=self.KeySeqLen).astype(hidden_states.dtype)
         attn_weights = self.dropout(attn_weights, key=key, inference=inference)
 
-        attn_output = hax.dot(note_KeySeqLen, attn_weights, v)  # [heads, seq_len, head_dim]
+        attn_output = hax.dot(self.KeySeqLen, attn_weights, v)  # [heads, seq_len, head_dim]
 
         attn_output = self.c_proj(attn_output)
         return attn_output
@@ -512,11 +506,21 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
 
     def __init__(self, Vocab: Axis, config: Gpt2Config, *, key):
         k_t, k_embeddings, k_mlp1, k_mlp2 = jrandom.split(key, 4)
-        # NOTE: I'm currently doing a bit of an ugly thing where all stuff with the new sequence length
-        # is inside the code for Gpt2Attention...
-        # this could be improved by creating a new Gpt2Config; 
-        # would prevent me from having to change any of the Gpt2Attention code. Something to do later.
-        self.transformer = Gpt2Transformer(config, key=k_t)
+
+        modified_config = Gpt2Config(
+            seq_len=(config.seq_len + 2) // 3,
+            hidden_dim=config.hidden_dim,
+            num_layers=config.num_layers,
+            num_heads=config.num_heads,
+            initializer_range=config.initializer_range,
+            attn_pdrop=config.attn_pdrop,
+            embed_pdrop=config.embed_pdrop,
+            layer_norm_epsilon=config.layer_norm_epsilon,
+            activation_function=config.activation_function,
+            scale_attn_by_inverse_layer_idx=config.scale_attn_by_inverse_layer_idx,
+            upcast_attn=config.upcast_attn
+        )
+        self.transformer = Gpt2Transformer(modified_config, key=k_t)
         self.embeddings = Gpt2Embeddings(
             Vocab=Vocab,
             Embed=config.Embed,
@@ -549,75 +553,55 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
 
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
 
-        #print("inference", inference)
-        #print("key", key)
-        #print("k_transformer", k_transformer)
+        Batch = input_ids.axes[0]
+        SeqLen = input_ids.axes[1]
+        Embed = self.embeddings.Embed
+        Vocab = self.embeddings.Vocab
 
         hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
-        seq_len = self.embeddings.SeqLen.size
-        note_seq_len = int((seq_len + 2) / 3)
+
+        seq_len = SeqLen.size
+        note_seq_len = (seq_len + 2) // 3
         note_SeqLen = Axis("seqlen", note_seq_len)
         note_KeySeqLen = note_SeqLen.alias(f"key_{note_SeqLen.name}")
-        batch = hidden_states.array.shape[0]
-        dim = hidden_states.array.shape[2]
 
         # fan in
-        start_token = hidden_states.take(self.embeddings.SeqLen, 0)
-        note_embeds = [start_token]
-        t0 = [start_token]
-        t1 = [start_token]
-        for i in range(1, self.embeddings.SeqLen.size, 3):
-            take0 = hidden_states.take(self.embeddings.SeqLen, i)
-            take1 = hidden_states.take(self.embeddings.SeqLen, i + 1) 
-            take2 = hidden_states.take(self.embeddings.SeqLen, i + 2)
-            note_embeds.append(take0 + take1 + take2)
-            t0.append(take0)
-            t1.append(take1)
-        # note_hidden_states replaces hidden_states and has sequence length 342 instead of 1024 
+        raw_1 = hidden_states.array
+        start_token = raw_1[:,0,:]
+        raw_1 = raw_1[:,1:,:]
+        raw_1 = raw_1.reshape((raw_1.shape[0], seq_len // 3, 3, -1))
+        tok1 = raw_1[:,:,0,:]
+        tok1 = jnp.concatenate((start_token[:,None,:], tok1), axis=1)
+        print("tok1", tok1)
+        # Note the :2 since we want to use the 1st 2 parts of the triple to predict the last
+        tok2 = raw_1[:,:,:2,:]
+        start_token2 = jnp.stack((start_token[:,None,:], start_token[:,None,:]), axis=2)
+        tok2 = jnp.concatenate((start_token2, tok2), axis=1)
+        tok2 = tok2.reshape((tok1.shape[0], tok1.shape[1], tok1.shape[2] * 2))
+        print("tok2", tok2)
+        raw_1 = raw_1.sum(axis=-2)
+        raw_1 = jnp.concatenate((start_token[:,None,:], raw_1), axis=1)
 
-        z1_states = hax.stack(note_SeqLen, t0)
-        z1_states = z1_states.rearrange([z1_states.axes[1], z1_states.axes[0], z1_states.axes[2]])
-        # z1_states has shape 8,342,512
-        #print("z1_states shape", z1_states.shape)
-        #print("z1_states axes", z1_states.axes)
-
-        t1_states = hax.stack(note_SeqLen, t1)
-        t1_states = t1_states.rearrange([z1_states.axes[1], z1_states.axes[0], z1_states.axes[2]])
-        t0_t1_states = [z1_states, t1_states]
-        Two = Axis("two", 2)
-        # Note that z1_states is actually using t0_t1 here because we want to feed both triple[0] and triple[1] to prediction for triple[2]
-        z2_states = hax.stack(Two, t0_t1_states)
-        z2_Embed = Axis("embed", dim * 2)
-        z2_states = z2_states.flatten_axes([self.config.Embed, Two], z2_Embed)
-        # z2_states has shape 8,342,1024
-        #print("z2_states shape", z2_states.shape)
-        #print("z2_states axes", z2_states.axes)
-
-        note_hidden_states = hax.stack(note_SeqLen, note_embeds)
-        # print("note hidden states shape", note_hidden_states.shape)
-        # print("note hidden states axis", note_hidden_states.axes)
-        note_hidden_states = note_hidden_states.rearrange([note_hidden_states.axes[1], note_hidden_states.axes[0], note_hidden_states.axes[2]])
-        # print("new note hidden states shape", note_hidden_states.shape)
-        # print("new note hidden states axis", note_hidden_states.axes)
+        new_axes = (Batch, note_SeqLen, Embed)
+        note_hidden_states = NamedArray(raw_1, new_axes) # note_hidden_states replaces hidden_states and has sequence length 342 instead of 1024
+        
+        z1_states = NamedArray(tok1, new_axes) # z1_states has shape 8,342,512
+        z2_Embed = Axis("embed", Embed.size * 2)
+        z2_axes = (Batch, note_SeqLen, z2_Embed)
+        z2_states = NamedArray(tok2, z2_axes) # z2_states has shape 8,342,1024
 
         note_attn_mask = hax.nn.attention.causal_mask(note_SeqLen, note_KeySeqLen)
         # NOTE: the above attention mask does not do forgetful casual masking, even if that parameter was specified in the original config!
 
-        # hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) # self.transformer(note_hidden_states, attn_mask, inference=inference, key=k_transformer)
-        note_hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) # self.transformer(note_hidden_states, attn_mask, inference=inference, key=k_transformer)
+        note_hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer)
         
         # z0, the conditional information that gets added to the first index of the triple, is the 0 vector and is trivial. 
         # z1 is a simple MLP on t_0.
-        #print("activation function ", self.config.activation_function)
-        z1_states = self.mlp1(z1_states)
-        # output z1_states shape is 8,342,512
-        #print("z_1 shape", z1_states.shape)
-        #print("z_1 axes", z1_states.axes)
+        z1_states = self.mlp1(z1_states) # output z1_states shape is 8,342,512
+        print("z1_states", z1_states)
         # z2 is an MLP on t0.extend(t1) = z2
-        z2_states = self.mlp2(z2_states)
-        # output z2_states shape is 8,342,512
-        #print("z_2 shape", z2_states.shape)
-        #print("z_2 axes", z2_states.axes)
+        z2_states = self.mlp2(z2_states) # output z2_states shape is 8,342,512
+        print("z2_states", z2_states)
 
         lm_logits_0 = self.embeddings.unembed(note_hidden_states)
         lm_logits_1 = self.embeddings.unembed(note_hidden_states + z1_states)
