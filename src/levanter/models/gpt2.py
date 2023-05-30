@@ -572,13 +572,11 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         raw_1 = raw_1.reshape((raw_1.shape[0], seq_len // 3, 3, -1))
         tok1 = raw_1[:,:,0,:]
         tok1 = jnp.concatenate((start_token[:,None,:], tok1), axis=1)
-        print("tok1", tok1)
         # Note the :2 since we want to use the 1st 2 parts of the triple to predict the last
         tok2 = raw_1[:,:,:2,:]
         start_token2 = jnp.stack((start_token[:,None,:], start_token[:,None,:]), axis=2)
         tok2 = jnp.concatenate((start_token2, tok2), axis=1)
         tok2 = tok2.reshape((tok1.shape[0], tok1.shape[1], tok1.shape[2] * 2))
-        print("tok2", tok2)
         raw_1 = raw_1.sum(axis=-2)
         raw_1 = jnp.concatenate((start_token[:,None,:], raw_1), axis=1)
 
@@ -598,25 +596,18 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         # z0, the conditional information that gets added to the first index of the triple, is the 0 vector and is trivial. 
         # z1 is a simple MLP on t_0.
         z1_states = self.mlp1(z1_states) # output z1_states shape is 8,342,512
-        print("z1_states", z1_states)
         # z2 is an MLP on t0.extend(t1) = z2
         z2_states = self.mlp2(z2_states) # output z2_states shape is 8,342,512
-        print("z2_states", z2_states)
 
         lm_logits_0 = self.embeddings.unembed(note_hidden_states)
         lm_logits_1 = self.embeddings.unembed(note_hidden_states + z1_states)
         lm_logits_2 = self.embeddings.unembed(note_hidden_states + z2_states)
-        logit_slices = []
-        for i in range(note_seq_len):
-            take0 = lm_logits_0.take(note_SeqLen, i)
-            take1 = lm_logits_1.take(note_SeqLen, i) 
-            take2 = lm_logits_2.take(note_SeqLen, i)
-            logit_slices.append(take0)
-            logit_slices.append(take1)
-            logit_slices.append(take2)
 
+        raw_2 = jnp.stack((lm_logits_0.array, lm_logits_1.array, lm_logits_2.array), axis=-1)
+        raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
         # NOTE: ignore the last 2 because 342 * 3 = 1026 > 1024
-        lm_logits = hax.stack(self.embeddings.SeqLen, logit_slices[:-2])
+        raw_2 = raw_2[:,:-2,:]
+        lm_logits = NamedArray(raw_2, (Batch, SeqLen, Vocab))
 
         return lm_logits
 
