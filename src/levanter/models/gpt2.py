@@ -100,6 +100,30 @@ class Gpt2Mlp(eqx.Module):
         return hidden_states
 
 
+class AsymmMlp(eqx.Module):
+    act: Callable = eqx.static_field()
+    c_fc: hnn.Linear  # projection from Embed to Intermediate (typically 4x Embed)
+    c_proj: hnn.Linear  # projection from Intermediate to Embed
+
+    def __init__(
+        self, Embed: Axis, Intermediate: Axis, Out: Axis, activation_fn: Union[str, Callable], *, key, use_bias: bool = True
+    ):
+        k_fc, k_proj = jrandom.split(key, 2)
+        self.c_fc = hnn.Linear(Out=Intermediate, In=Embed, key=k_fc, use_bias=use_bias)
+        self.c_proj = hnn.Linear(Out=Out, In=Intermediate, key=k_proj, use_bias=use_bias)
+        if isinstance(activation_fn, str):
+            activation_fn = ACT2FN[activation_fn]
+        self.act = activation_fn  # type: ignore
+
+    @named_call
+    def __call__(self, hidden_states: NamedArray):
+        hidden_states = hax.auto_sharded(hidden_states)
+        hidden_states = self.c_fc(hidden_states)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.c_proj(hidden_states)
+        return hidden_states
+
+
 class Gpt2Attention(TorchSerializationMixin, eqx.Module):
     c_attn: hnn.Linear  # input projection from [embed] -> [(q, k, v), heads, head_dim]
     c_proj: hnn.Linear  # output projection from [heads, head_dim] -> [embed]
@@ -438,7 +462,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         else:
             embeddings = self.token_embeddings
         # NOTE: I was having issues with the following boolean statement so I changed it to the above code
-        # embeddings = self.token_out_embeddings or self.token_embeddings
+        #embeddings = self.token_out_embeddings or self.token_embeddings
         return hax.dot(self.Embed, hidden_states, embeddings)
 
     def unembed_0(self, hidden_states: NamedArray):
@@ -461,6 +485,8 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
 class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
     transformer: Gpt2Transformer
     embeddings: Gpt2Embeddings
+    mlp1: Gpt2Mlp
+    mlp2: Gpt2Mlp
 
     @property
     def config(self):
@@ -479,7 +505,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         return self.embeddings.SeqLen
 
     def __init__(self, Vocab: Axis, config: Gpt2Config, *, key):
-        k_t, k_embeddings = jrandom.split(key, 2)
+        k_t, k_embeddings, k_mlp1, k_mlp2 = jrandom.split(key, 4)
         modified_config = Gpt2Config(
             seq_len=(config.seq_len + 2) // 3,
             hidden_dim=config.hidden_dim,
@@ -500,11 +526,26 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             Embed=config.Embed,
             SeqLen=config.SeqLen,
             initializer_range=config.initializer_range,
-            tie_word_embeddings=True, 
+            tie_word_embeddings=False, 
             use_three_out_embeddings=True,
             dropout_prob=config.embed_pdrop,
             key=k_embeddings,
         )
+
+        MlpIntermediate = Axis(name="mlp", size=config.hidden_dim) # in this case the intermediate dimension of the MLP will be 512, same as hidden_dim
+        self.mlp1 = Gpt2Mlp(Embed=config.Embed,
+                            Intermediate=MlpIntermediate,
+                            activation_fn=config.activation_function,
+                            key=k_mlp1,
+                            use_bias=config.use_bias)
+        z2_Embed = Axis(name="embed", size=config.hidden_dim * 2)
+        # use an asymmetrical MLP for MLP2 to transform from seq of 1024 to 512
+        self.mlp2 = AsymmMlp(Embed=z2_Embed,
+                            Intermediate=MlpIntermediate,
+                            Out=config.Embed,
+                            activation_fn=config.activation_function,
+                            key=k_mlp2,
+                            use_bias=config.use_bias)
 
     def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key):
         if not inference and key is None:
@@ -529,25 +570,45 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         start_token = raw_1[:,0,:]
         raw_1 = raw_1[:,1:,:]
         raw_1 = raw_1.reshape((raw_1.shape[0], seq_len // 3, 3, -1))
+        tok1 = raw_1[:,:,0,:]
+        tok1 = jnp.concatenate((start_token[:,None,:], tok1), axis=1)
+        # Note the :2 since we want to use the 1st 2 parts of the triple to predict the last
+        tok2 = raw_1[:,:,:2,:]
+        start_token2 = jnp.stack((start_token[:,None,:], start_token[:,None,:]), axis=2)
+        tok2 = jnp.concatenate((start_token2, tok2), axis=1)
+        tok2 = tok2.reshape((tok1.shape[0], tok1.shape[1], tok1.shape[2] * 2))
         raw_1 = raw_1.sum(axis=-2)
         raw_1 = jnp.concatenate((start_token[:,None,:], raw_1), axis=1)
+
         new_axes = (Batch, note_SeqLen, Embed)
         note_hidden_states = NamedArray(raw_1, new_axes)
+
+        z1_states = NamedArray(tok1, new_axes) # z1_states has shape 8,342,512
+        z2_Embed = Axis("embed", Embed.size * 2)
+        z2_axes = (Batch, note_SeqLen, z2_Embed)
+        z2_states = NamedArray(tok2, z2_axes) # z2_states has shape 8,342,1024
 
         note_attn_mask = hax.nn.attention.causal_mask(note_SeqLen, note_KeySeqLen)
         # NOTE: the above attention mask does not do forgetful casual masking, even if that parameter was specified in the original config!
 
         hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) 
         
-        lm_logits_0 = self.embeddings.unembed_0(hidden_states)
-        lm_logits_1 = self.embeddings.unembed_1(hidden_states)
-        lm_logits_2 = self.embeddings.unembed_2(hidden_states)
-
-        raw_2 = jnp.stack((lm_logits_0.array, lm_logits_1.array, lm_logits_2.array), axis=-1)
+        # z0, the conditional information that gets added to the first index of the triple, is the 0 vector and is trivial. 
+        # z1 is a simple MLP on t_0.
+        z1_states = self.mlp1(z1_states) # output z1_states shape is 8,342,512
+        # z2 is an MLP on t0.extend(t1) = z2
+        z2_states = self.mlp2(z2_states) # output z2_states shape is 8,342,512
+        
+        state0 = hidden_states
+        state1 = hidden_states + z1_states
+        state2 = hidden_states + z2_states
+        raw_2 = jnp.stack((state0.array, state1.array, state2.array), axis=-1)
         raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
         raw_2 = raw_2[:,:-2,:]
-        lm_logits = NamedArray(raw_2, (Batch, SeqLen, Vocab))
+        pre_unembed = NamedArray(raw_2, (Batch, SeqLen, Embed))
 
+        lm_logits = self.embeddings.unembed(pre_unembed)
+        
         return lm_logits
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
