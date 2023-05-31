@@ -526,8 +526,8 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             Embed=config.Embed,
             SeqLen=config.SeqLen,
             initializer_range=config.initializer_range,
-            tie_word_embeddings=False, 
-            use_three_out_embeddings=True,
+            tie_word_embeddings=True, 
+            use_three_out_embeddings=False,
             dropout_prob=config.embed_pdrop,
             key=k_embeddings,
         )
