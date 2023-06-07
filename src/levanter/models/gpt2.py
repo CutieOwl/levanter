@@ -455,7 +455,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
         assert self.token_out_embeddings is None
-        return {"token_embeddings": "wte.weight", "position_embeddings": "wpe.weight"}
+        return {"token_embeddings": "wte.weight", "position_embeddings": "wpe.weight", "token_out_embeddings_0": "lm_head0.weight", "token_out_embeddings_1": "lm_head1.weight", "token_out_embeddings_2": "lm_head2.weight"}
 
 
 class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
@@ -514,7 +514,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
 
         Batch = input_ids.axes[0]
-        SeqLen = input_ids.axes[1]
+        SeqLen = self.embeddings.SeqLen
         Embed = self.embeddings.Embed
         Vocab = self.embeddings.Vocab
 
@@ -527,10 +527,8 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
 
         raw_1 = hidden_states.array
         start_token = raw_1[:,0,:]
-        raw_1 = raw_1[:,1:,:]
-        raw_1 = raw_1.reshape((raw_1.shape[0], seq_len // 3, 3, -1))
-        raw_1 = raw_1.sum(axis=-2)
-        raw_1 = jnp.concatenate((start_token[:,None,:], raw_1), axis=1)
+        sum_states = raw_1[:,1::3,:] + raw_1[:,2::3,:] + raw_1[:,3::3,:]
+        raw_1 = jnp.concatenate((start_token[:,None,:], sum_states), axis=1)
         new_axes = (Batch, note_SeqLen, Embed)
         note_hidden_states = NamedArray(raw_1, new_axes)
 
@@ -543,8 +541,10 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         lm_logits_1 = self.embeddings.unembed_1(hidden_states)
         lm_logits_2 = self.embeddings.unembed_2(hidden_states)
 
-        raw_2 = jnp.stack((lm_logits_0.array, lm_logits_1.array, lm_logits_2.array), axis=-1)
-        raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
+        raw_2 = jnp.ones((Batch.size, note_seq_len * 3, Vocab.size))
+        raw_2 = raw_2.at[:,0::3,:].set(lm_logits_0.array)
+        raw_2 = raw_2.at[:,1::3,:].set(lm_logits_1.array)
+        raw_2 = raw_2.at[:,2::3,:].set(lm_logits_2.array)
         raw_2 = raw_2[:,:-2,:]
         lm_logits = NamedArray(raw_2, (Batch, SeqLen, Vocab))
 
