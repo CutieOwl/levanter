@@ -468,7 +468,7 @@ class NamedArray:
         return float(self.array)
 
 
-def take(array: NamedArray, axis: Axis, index: Union[int, NamedArray]) -> NamedArray:
+def take(array: NamedArray, axis: Axis, index) -> NamedArray:
     """
     Selects elements from an array along an axis, by an index or by another named array
 
@@ -478,10 +478,12 @@ def take(array: NamedArray, axis: Axis, index: Union[int, NamedArray]) -> NamedA
     if axis_index is None:
         raise ValueError(f"axis {axis} not found in {array}")
     if isinstance(index, int):
+        #print("index is int")
         # just drop the axis
         new_array = jnp.take(array.array, index, axis=axis_index)
         new_axes = array.axes[:axis_index] + array.axes[axis_index + 1 :]
     else:
+        #print("index is namedarray")
         new_array = jnp.take(array.array, index.array, axis=axis_index)
         new_axes = array.axes[:axis_index] + index.axes + array.axes[axis_index + 1 :]
     # new axes come from splicing the old axis with

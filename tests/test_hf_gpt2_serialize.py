@@ -172,3 +172,6 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision):
         assert onp.isclose(
             jax_p, torch_p.detach().cpu().numpy(), rtol=1e-3, atol=2e-3
         ).all(), f"{key}: {onp.linalg.norm(jax_p - torch_p.detach().cpu().numpy(), ord=onp.inf)}"
+
+if __name__ == "__main__":
+    test_mistral_gpt2_roundtrip()

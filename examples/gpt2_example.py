@@ -7,6 +7,10 @@ import jax.random as jrandom
 import jmp
 import pyrallis
 from jax.interpreters.pxla import PartitionSpec
+import sys
+sys.path.append('/afs/cs.stanford.edu/u/kathli/repos/transformers-levanter/src')
+sys.path.append('/afs/cs.stanford.edu/u/kathli/repos/levanter-midi/src')
+
 from transformers import GPT2Tokenizer
 
 import haliax as hax
@@ -183,6 +187,7 @@ def main(config: TrainGpt2Config):
         @named_pjit(axis_resources=parameter_axis_mapping)
         def eval_loss(model, input_ids):
             input_ids = hax.named(input_ids, (EvalBatch, SeqLen))
+            print("input_ids shape", input_ids)
             # just use causal mask for evaluation
             mask = hax.nn.attention.causal_mask(SeqLen, KeySeqLen)
             return compute_loss(model, input_ids, mask, None, True)
@@ -195,6 +200,7 @@ def main(config: TrainGpt2Config):
                 n = 0
 
                 for batch in eval_dataset:
+                    print("batch shape", batch.shape)
                     loss += eval_loss(model, batch).item()
                     n += 1
 

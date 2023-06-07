@@ -6,7 +6,11 @@ from huggingface_hub import cached_download, hf_hub_url
 from jax.random import PRNGKey
 from transformers import GPT2Config as HfGpt2Config
 
+import sys
+sys.path.append('/afs/cs.stanford.edu/u/kathli/repos/levanter-midi/src')
+
 from haliax import Axis
+
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 
 
@@ -29,6 +33,7 @@ def load_hf_model_checkpoint(location_or_id, model_file="pytorch_model.bin", map
         config_path = cached_download(config_url)
         config = json.load(open(config_path))
 
+    config["n_positions"] = 1024
     return config, checkpoint
 
 
@@ -72,7 +77,7 @@ def gpt2_config_to_hf(vocab_size: int, config: Gpt2Config) -> HfGpt2Config:
 
 def load_hf_gpt2_checkpoint(location_or_id, map_location=None, revision=None):
     config, checkpoint = load_hf_model_checkpoint(location_or_id, map_location=map_location, revision=revision)
-
+    print("config", config)
     config = HfGpt2Config.from_dict(config)
 
     Vocab = Axis("vocab", config.vocab_size)

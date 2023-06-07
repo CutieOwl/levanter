@@ -1,5 +1,4 @@
 equinox~=0.9.0
-transformers>=4.22.0
 optax
 wandb
 pyrallis

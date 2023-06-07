@@ -10,6 +10,9 @@ import pyrallis
 from equinox import default_deserialise_filter_spec
 from huggingface_hub import Repository
 from jaxtyping import PyTree
+import sys
+sys.path.append('/afs/cs.stanford.edu/u/kathli/repos/transformers-levanter/src')
+sys.path.append('/afs/cs.stanford.edu/u/kathli/repos/levanter-midi/src')
 from transformers import AutoTokenizer, GPT2Tokenizer
 
 import haliax as hax
@@ -72,6 +75,7 @@ def main(config: ConvertGpt2Config):
                     return array
 
             model = jax.tree_util.tree_map(patch_vocab, model, is_leaf=is_named_array)
+        print("model", model)
 
         if config.hf_checkpoint is not None:
             repo: Repository = Repository(

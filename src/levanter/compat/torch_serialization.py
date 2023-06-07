@@ -5,6 +5,9 @@ import jax.numpy as jnp
 import numpy as onp
 from jaxtyping import PyTree
 
+import sys
+sys.path.append('/afs/cs.stanford.edu/u/kathli/repos/levanter-midi/src')
+
 from haliax import NamedArray
 
 
@@ -68,6 +71,7 @@ def torch_to_jax(t: Optional[TorchTensor]) -> Optional[jnp.ndarray]:
 
 def jax_tree_from_torch_state_dict(tree: PyTree, torch_dict: StateDict, prefix: Optional[str] = None) -> PyTree:
     # TODO: assert compatibility of old and new values (type, shape, etc.)
+    # print("tree", tree)
     if isinstance(tree, eqx.Module):
         if hasattr(tree, "from_torch_dict"):
             return tree.from_torch_dict(torch_dict, prefix)
@@ -86,6 +90,8 @@ def jax_tree_from_torch_state_dict(tree: PyTree, torch_dict: StateDict, prefix: 
         # TODO: where's the best place to put this logic for NamedArrays
         if prefix is None:
             raise ValueError("Cannot extract a leaf value from a torch dict without a prefix")
+        #print("prefix", prefix)
+        #print("torch_dict", torch_dict[prefix])
         return NamedArray(torch_to_jax(torch_dict[prefix]), axes=tree.axes)
     elif tree is None:
         if prefix is None:

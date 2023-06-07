@@ -7,11 +7,21 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
+import numpy as onp
+
+import inspect
+import os
+
+import sys
+sys.path.append('/afs/cs.stanford.edu/u/kathli/repos/levanter-midi/src')
+
 import haliax as hax
 import haliax.jax_utils
 import haliax.nn as hnn
+
 from haliax import Axis, NamedArray
 from haliax.jax_utils import named_call, shaped_rng_split
+
 from levanter.compat.torch_serialization import StateDict, TorchSerializationMixin, apply_prefix, reshape_linear_layer
 from levanter.modeling_utils import ACT2FN
 
@@ -21,10 +31,10 @@ sharded_normal = hax.random.generate_sharded(hax.random.normal)
 
 @dataclass(frozen=True)
 class Gpt2Config:
-    seq_len: int = 512
-    hidden_dim: int = 768
-    num_layers: int = 12
-    num_heads: int = 12
+    seq_len: int = 1024 #512
+    hidden_dim: int = 512# 768
+    num_layers: int = 4 #12
+    num_heads: int = 8 #12
 
     # how much to scale the embedding dim for the mlp layer
     mlp_scale: int = 4
@@ -317,6 +327,7 @@ class Gpt2Transformer(TorchSerializationMixin, eqx.Module):
     def from_torch_dict(self, torch_dict: StateDict, prefix: Optional[str] = None):
         import torch
 
+        print("inside from_torch_dict")
         # this method is a bit of a pain because we use a vectorized set of blocks, meaning that we have 1 GptBlock,
         # whereas in torch we have numlayers GptBlocks. So we need to build one GptBlock from numlayers GptBlocks.
         # first we vectorize the keys for the torch dict
@@ -424,8 +435,11 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
 
     @named_call
     def embed(self, input_ids, inference, *, key):
+        #print("input_ids", input_ids)
+        #print(self.token_embeddings.take)
         input_embeds = self.token_embeddings.take(self.Vocab, input_ids)
         position_embeds = self.position_embeddings
+        print("position embedding shape", self.position_embeddings.shape)
 
         hidden_states = input_embeds + position_embeds
         hidden_states = self.dropout(hidden_states, inference=inference, key=key)
@@ -455,7 +469,8 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
         assert self.token_out_embeddings is None
-        return {"token_embeddings": "wte.weight", "position_embeddings": "wpe.weight"}
+        print("using modified lm_head0 _torch_key_map")
+        return {"token_embeddings": "wte.weight", "position_embeddings": "wpe.weight", "token_out_embeddings_0": "lm_head0.weight", "token_out_embeddings_1": "lm_head1.weight", "token_out_embeddings_2": "lm_head2.weight"}
 
 
 class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
@@ -514,11 +529,13 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
 
         Batch = input_ids.axes[0]
-        SeqLen = input_ids.axes[1]
+        SeqLen = self.embeddings.SeqLen
         Embed = self.embeddings.Embed
         Vocab = self.embeddings.Vocab
 
         hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
+        hidden_states_arr = hidden_states.array
+        print("lev hidden_states before sum", hidden_states_arr)
 
         seq_len = SeqLen.size
         note_seq_len = (seq_len + 2) // 3
@@ -527,27 +544,38 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
 
         raw_1 = hidden_states.array
         start_token = raw_1[:,0,:]
-        raw_1 = raw_1[:,1:,:]
-        raw_1 = raw_1.reshape((raw_1.shape[0], seq_len // 3, 3, -1))
-        raw_1 = raw_1.sum(axis=-2)
-        raw_1 = jnp.concatenate((start_token[:,None,:], raw_1), axis=1)
+        sum_states = raw_1[:,1::3,:] + raw_1[:,2::3,:] + raw_1[:,3::3,:]
+        raw_1 = jnp.concatenate((start_token[:,None,:], sum_states), axis=1)
         new_axes = (Batch, note_SeqLen, Embed)
         note_hidden_states = NamedArray(raw_1, new_axes)
+        hidden_states_arr = note_hidden_states.array
+        print("lev hidden_states after sum", hidden_states_arr)
 
         note_attn_mask = hax.nn.attention.causal_mask(note_SeqLen, note_KeySeqLen)
         # NOTE: the above attention mask does not do forgetful casual masking, even if that parameter was specified in the original config!
 
-        hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) 
-        
-        lm_logits_0 = self.embeddings.unembed_0(hidden_states)
-        lm_logits_1 = self.embeddings.unembed_1(hidden_states)
-        lm_logits_2 = self.embeddings.unembed_2(hidden_states)
+        hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer)
+        hidden_states_arr = hidden_states.array
+        print("lev hidden_states after attention", hidden_states_arr)
 
-        raw_2 = jnp.stack((lm_logits_0.array, lm_logits_1.array, lm_logits_2.array), axis=-1)
-        raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
+        lm_logits_0 = self.embeddings.unembed_0(hidden_states)
+        print("lev lm_logits_0", lm_logits_0.array)
+        lm_logits_1 = self.embeddings.unembed_1(hidden_states)
+        print("lev lm_logits_1", lm_logits_1.array)
+        lm_logits_2 = self.embeddings.unembed_2(hidden_states)
+        print("lev lm_logits_2", lm_logits_2.array)
+
+        raw_2 = jnp.ones((Batch.size, note_seq_len * 3, Vocab.size))
+        raw_2 = raw_2.at[:,0::3,:].set(lm_logits_0.array)
+        raw_2 = raw_2.at[:,1::3,:].set(lm_logits_1.array)
+        raw_2 = raw_2.at[:,2::3,:].set(lm_logits_2.array)
         raw_2 = raw_2[:,:-2,:]
         lm_logits = NamedArray(raw_2, (Batch, SeqLen, Vocab))
+        
+        print("lev lm_logits_0[0]", lm_logits_0.array[:,0,:])
+        print("lev lm_logits[0]", lm_logits.array[:,0,:])
 
+        print("lev lm_logits", lm_logits)
         return lm_logits
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
