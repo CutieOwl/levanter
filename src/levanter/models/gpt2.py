@@ -21,10 +21,10 @@ sharded_normal = hax.random.generate_sharded(hax.random.normal)
 
 @dataclass(frozen=True)
 class Gpt2Config:
-    seq_len: int = 512
-    hidden_dim: int = 768
-    num_layers: int = 12
-    num_heads: int = 12
+    seq_len: int = 1024 #512
+    hidden_dim: int = 512# 768
+    num_layers: int = 4 #12
+    num_heads: int = 8 #12
 
     # how much to scale the embedding dim for the mlp layer
     mlp_scale: int = 4
@@ -555,7 +555,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
 
         Batch = input_ids.axes[0]
-        SeqLen = input_ids.axes[1]
+        SeqLen = self.embeddings.SeqLen
         Embed = self.embeddings.Embed
         Vocab = self.embeddings.Vocab
 
@@ -602,8 +602,12 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         state0 = hidden_states
         state1 = hidden_states + z1_states
         state2 = hidden_states + z2_states
-        raw_2 = jnp.stack((state0.array, state1.array, state2.array), axis=-1)
-        raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
+
+        raw_2 = jnp.ones((Batch.size, note_seq_len * 3, Vocab.size))
+        raw_2 = raw_2.at[:,0::3,:].set(state0.array)
+        raw_2 = raw_2.at[:,1::3,:].set(state1.array)
+        raw_2 = raw_2.at[:,2::3,:].set(state2.array)
+        
         raw_2 = raw_2[:,:-2,:]
         pre_unembed = NamedArray(raw_2, (Batch, SeqLen, Embed))
 
@@ -612,4 +616,4 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         return lm_logits
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
-        return {"transformer": None, "embeddings": None}
+        return {"transformer": None, "embeddings": None, "mlp1": None, "mlp2": None}
