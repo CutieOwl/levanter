@@ -29,6 +29,7 @@ def load_hf_model_checkpoint(location_or_id, model_file="pytorch_model.bin", map
         config_path = cached_download(config_url)
         config = json.load(open(config_path))
 
+    config["n_positions"] = 1024
     return config, checkpoint
 
 
