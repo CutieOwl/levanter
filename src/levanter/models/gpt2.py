@@ -615,12 +615,16 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         raw_2 = raw_2[:,:-2,:]
         lm_logits = NamedArray(raw_2, (Batch, SeqLen, Vocab))
         '''
-        ##raw_2 = jnp.dstack((state0.array, state1.array, state2.array))
+        raw_2 = jnp.dstack((state0.array, state1.array, state2.array))
         #print("raw_2 shape", raw_2.shape)
-        ##raw_2 = raw_2.reshape((Batch.size, note_seq_len * 3, Embed.size))
-        raw_2 = jnp.stack((state0.array, state1.array, state2.array), axis=-1)
-        raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
+        raw_2 = raw_2.reshape((Batch.size, note_seq_len * 3, Embed.size))
+        #raw_2 = jnp.stack((state0.array, state1.array, state2.array), axis=-1)
+        #raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
         
+        #raw_2 = jnp.dstack((state0.array, state1.array, state2.array))
+        #raw_2 = jnp.ones((Batch.size, note_seq_len * 3, Embed.size))
+
+        #raw_2 = raw_2.reshape((Batch.size, note_seq_len * 3, Embed.size))
         raw_2 = raw_2[:,:-2,:]
         pre_unembed = NamedArray(raw_2, (Batch, SeqLen, Embed))
         #print("pre_unembed shape", pre_unembed.shape)
