@@ -592,7 +592,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         # NOTE: the above attention mask does not do forgetful casual masking, even if that parameter was specified in the original config!
 
         hidden_states = self.transformer(note_hidden_states, note_attn_mask, inference=inference, key=k_transformer) 
-        
+
         # z0, the conditional information that gets added to the first index of the triple, is the 0 vector and is trivial. 
         # z1 is a simple MLP on t_0.
         z1_states = self.mlp1(z1_states) # output z1_states shape is 8,342,512
@@ -603,13 +603,27 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         state1 = hidden_states + z1_states
         state2 = hidden_states + z2_states
 
+        '''
+        lm_logits_0 = self.embeddings.unembed_0(hidden_states)
+        lm_logits_1 = self.embeddings.unembed_1(hidden_states)
+        lm_logits_2 = self.embeddings.unembed_2(hidden_states)
+
         raw_2 = jnp.ones((Batch.size, note_seq_len * 3, Vocab.size))
-        raw_2 = raw_2.at[:,0::3,:].set(state0.array)
-        raw_2 = raw_2.at[:,1::3,:].set(state1.array)
-        raw_2 = raw_2.at[:,2::3,:].set(state2.array)
+        raw_2 = raw_2.at[:,0::3,:].set(lm_logits_0.array)
+        raw_2 = raw_2.at[:,1::3,:].set(lm_logits_1.array)
+        raw_2 = raw_2.at[:,2::3,:].set(lm_logits_2.array)
+        raw_2 = raw_2[:,:-2,:]
+        lm_logits = NamedArray(raw_2, (Batch, SeqLen, Vocab))
+        '''
+        ##raw_2 = jnp.dstack((state0.array, state1.array, state2.array))
+        #print("raw_2 shape", raw_2.shape)
+        ##raw_2 = raw_2.reshape((Batch.size, note_seq_len * 3, Embed.size))
+        raw_2 = jnp.stack((state0.array, state1.array, state2.array), axis=-1)
+        raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
         
         raw_2 = raw_2[:,:-2,:]
         pre_unembed = NamedArray(raw_2, (Batch, SeqLen, Embed))
+        #print("pre_unembed shape", pre_unembed.shape)
 
         lm_logits = self.embeddings.unembed(pre_unembed)
         
