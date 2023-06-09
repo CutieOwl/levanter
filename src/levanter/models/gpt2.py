@@ -478,8 +478,8 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         return hax.dot(self.Embed, hidden_states, self.token_out_embeddings_2)
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
-        assert self.token_out_embeddings is None
-        return {"token_embeddings": "wte.weight", "position_embeddings": "wpe.weight"}
+        #assert self.token_out_embeddings is None
+        return {"token_embeddings": "wte.weight", "position_embeddings": "wpe.weight", "token_out_embeddings": "lm_head.weight"}
 
 
 class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
@@ -526,7 +526,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             Embed=config.Embed,
             SeqLen=config.SeqLen,
             initializer_range=config.initializer_range,
-            tie_word_embeddings=True, 
+            tie_word_embeddings=False, 
             use_three_out_embeddings=False,
             dropout_prob=config.embed_pdrop,
             key=k_embeddings,
@@ -603,35 +603,15 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         state1 = hidden_states + z1_states
         state2 = hidden_states + z2_states
 
-        '''
-        lm_logits_0 = self.embeddings.unembed_0(hidden_states)
-        lm_logits_1 = self.embeddings.unembed_1(hidden_states)
-        lm_logits_2 = self.embeddings.unembed_2(hidden_states)
-
-        raw_2 = jnp.ones((Batch.size, note_seq_len * 3, Vocab.size))
-        raw_2 = raw_2.at[:,0::3,:].set(lm_logits_0.array)
-        raw_2 = raw_2.at[:,1::3,:].set(lm_logits_1.array)
-        raw_2 = raw_2.at[:,2::3,:].set(lm_logits_2.array)
-        raw_2 = raw_2[:,:-2,:]
-        lm_logits = NamedArray(raw_2, (Batch, SeqLen, Vocab))
-        '''
         raw_2 = jnp.dstack((state0.array, state1.array, state2.array))
-        #print("raw_2 shape", raw_2.shape)
-        raw_2 = raw_2.reshape((Batch.size, note_seq_len * 3, Embed.size))
-        #raw_2 = jnp.stack((state0.array, state1.array, state2.array), axis=-1)
-        #raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, raw_2.shape[2]))
-        
-        #raw_2 = jnp.dstack((state0.array, state1.array, state2.array))
-        #raw_2 = jnp.ones((Batch.size, note_seq_len * 3, Embed.size))
+        raw_2 = raw_2.reshape((raw_2.shape[0], raw_2.shape[1] * 3, -1))
 
-        #raw_2 = raw_2.reshape((Batch.size, note_seq_len * 3, Embed.size))
         raw_2 = raw_2[:,:-2,:]
         pre_unembed = NamedArray(raw_2, (Batch, SeqLen, Embed))
-        #print("pre_unembed shape", pre_unembed.shape)
 
         lm_logits = self.embeddings.unembed(pre_unembed)
         
         return lm_logits
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
-        return {"transformer": None, "embeddings": None, "mlp1": None, "mlp2": None}
+        return {"transformer": None, "embeddings": None, "mlp1": "mlp1", "mlp2": "mlp2"}
