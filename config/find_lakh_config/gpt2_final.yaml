@@ -8,20 +8,20 @@ data:
   plaintext: True
   enforce_eos: False
 model:
-  hidden_dim: 768
-  num_heads: 12
-  num_layers: 12
+  hidden_dim: 512
+  num_heads: 8
+  num_layers: 4
   seq_len: 1024
 trainer:
   mp: p=f32,c=bfloat16
-  num_train_steps: 100000
+  num_train_steps: 20000
 
   checkpointer:
     base_path: "/nlp/scr/kathli/checkpoints"
     save_interval: 30m
 
-  per_device_eval_parallelism: 4
-  per_device_parallelism: 4
+  per_device_eval_parallelism: 2
+  per_device_parallelism: 2
   axis_resources:
     batch: "data"
     vocab: "model"
