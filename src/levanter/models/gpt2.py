@@ -22,9 +22,9 @@ sharded_normal = hax.random.generate_sharded(hax.random.normal)
 @dataclass(frozen=True)
 class Gpt2Config:
     seq_len: int = 1024 #512
-    hidden_dim: int = 512# 768
-    num_layers: int = 4 #12
-    num_heads: int = 8 #12
+    hidden_dim: int = 768
+    num_layers: int = 12
+    num_heads: int = 12
 
     # how much to scale the embedding dim for the mlp layer
     mlp_scale: int = 4
