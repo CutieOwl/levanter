@@ -15,7 +15,7 @@ model:
 trainer:
   mp: p=f32,c=bfloat16
   num_train_steps: 100000
-  load_checkpoint_path: "/nlp/scr/kathli/checkpoints/apricot-dew-158/step-17438"
+  load_checkpoint_path: "/nlp/scr/kathli/checkpoints/olive-universe-204/step-62128"
 
   checkpointer:
     base_path: "/nlp/scr/kathli/checkpoints"

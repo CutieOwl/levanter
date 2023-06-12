@@ -34,7 +34,7 @@ def test_hf_gpt2_roundtrip():
 
 #@skip_if_no_torch
 def test_mistral_gpt2_roundtrip():
-    _roundtrip_compare_gpt2_checkpoint("/nlp/scr/kathli/checkpoints/apricot-dew-158/step-17438/hf", "/nlp/scr/kathli/checkpoints/apricot-dew-158/step-17438", None)
+    _roundtrip_compare_gpt2_checkpoint("/nlp/scr/kathli/checkpoints/olive-universe-204/step-60000/hf", "/nlp/scr/kathli/checkpoints/olive-universe-204/step-60000", None)
 
 
 def _rand_input(key: PRNGKey, seq_len: int, vocab_size) -> jnp.ndarray:
