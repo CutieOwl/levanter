@@ -259,7 +259,7 @@ class TrainerConfig:
     load_checkpoint_path: Optional[str] = None
 
     # Config related to optimizer (always adam for now)
-    learning_rate: float = 6e-4
+    learning_rate: float = 3e-4
     weight_decay: float = 0.0
     beta1: float = 0.9
     beta2: float = 0.999
