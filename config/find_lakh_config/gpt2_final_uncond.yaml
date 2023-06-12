@@ -15,7 +15,8 @@ model:
 trainer:
   mp: p=f32,c=bfloat16
   num_train_steps: 100000
-  load_checkpoint_path: "/nlp/scr/kathli/checkpoints/olive-universe-204/step-62128"
+  load_checkpoint_path: "/nlp/scr/kathli/checkpoints/lunar-night-207/step-66391"
+  learning_rate: 3E-4
 
   checkpointer:
     base_path: "/nlp/scr/kathli/checkpoints"
