@@ -22,7 +22,7 @@ trainer:
     base_path: "/nlp/scr/kathli/checkpoints"
     save_interval: 30m
 
-  per_device_parallelism: 16
+  per_device_parallelism: 4
   axis_resources:
     batch: "data"
     vocab: "model"
