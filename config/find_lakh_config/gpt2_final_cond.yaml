@@ -15,7 +15,7 @@ model:
 trainer:
   mp: p=f32,c=bfloat16
   num_train_steps: 100000
-  load_checkpoint_path: "/nlp/scr/kathli/checkpoints/celestial-paper-200/step-17815"
+  load_checkpoint_path: "/nlp/scr/kathli/checkpoints/glad-firebrand-203/step-60000"
   checkpointer:
     base_path: "/nlp/scr/kathli/checkpoints"
     save_interval: 30m
