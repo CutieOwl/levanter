@@ -1,20 +1,27 @@
 umask 000
 LEV_ROOT=$(dirname "$(readlink -f $0)")/..
 
-# figure out venv, first check if we wrote a path in infra/venv_path
-if [ ! -d "$VENV" ] && [ -f "$LEV_ROOT/infra/venv_path.txt" ]; then
-  VENV=$(cat "$LEV_ROOT"/infra/venv_path.txt)
-fi
-
-# if we still don't have a venv, we'll look in our default
+VENV=~/venv310
+# if the venv doesn't exist, make it
 if [ ! -d "$VENV" ]; then
-  VENV=/files/venv32
+    echo "Creating virtualenv at $VENV"
+    python3.10 -m venv $VENV
 fi
 
-virtualenv --python=python3.10 $VENV
 source $VENV/bin/activate
 
-pip install -e levanter-midi
+pip install -U pip
+pip install -U wheel
+
+# jax
+pip install -U "jax[tpu]==0.4.6" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+
+echo $VENV > levanter-midi/infra/venv_path.txt
+
+cd levanter-midi
+
+pip install -e .
+
 pip install -U pyrallis
 pip install -U torch torchvision torchaudio
 
