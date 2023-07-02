@@ -393,7 +393,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         key,
     ):
         super().__init__()
-        k_wte, k_wpe, k_out = jrandom.split(key, 3)
+        k_wte,  k_out = jrandom.split(key, 2) #k_wpe,
 
         self.Vocab = Vocab
         self.SeqLen = SeqLen
@@ -482,8 +482,9 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
                 closest_power_of_2 = 2**math.floor(math.log2(n))  #when the number of heads is not a power of 2, we use this workaround. 
                 return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
         
-        Batch = input_ids.axes[0]
-        batch = input_ids.array.shape[0]
+        print("hidden_states axes", hidden_states.axes)
+        Batch = hidden_states.axes[0]
+        batch = hidden_states.array.shape[0]
 
         maxpos = self.embeddings.SeqLen.size
         attn_heads = self.transformer.config.num_heads
@@ -497,6 +498,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         print("future mask shape", future_mask.shape)
         future_mask = jnp.tile(future_mask, (batch, 1, 1, 1))
         future_attn_mask = NamedArray(future_mask, (Batch, self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
+        print("future attn mask axes", future_attn_mask.axes)
         #print("alibi 1", np.array(jax.device_get(self.alibi)))
         #print("alibi shape 1", self.alibi.shape)
         #self.alibi = self.alibi.reshape(attn_heads, 1, maxpos)
