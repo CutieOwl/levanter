@@ -11,6 +11,7 @@ if [ ! -d "$VENV" ]; then
   VENV=/files/venv32
 fi
 
+virtualenv --python=python3.10 $VENV
 source $VENV/bin/activate
 
 pip install -e levanter-midi
