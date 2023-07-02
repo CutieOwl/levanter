@@ -497,16 +497,16 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
         hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
 
-        dim = hidden_states.array.shape[1]
+        #dim = hidden_states.array.shape[1]
         print("attn mask", attn_mask.axes)
         attn_arr = attn_mask.array
-        print('original attn arr', np.array(jax.device_get(attn_arr)))
-        attn_arr = jnp.expand_dims(attn_arr, 0) + self.alibi
-        print("attn arr shape", attn_arr.shape)
-        attn_arr = attn_arr[:hidden_states.array.shape[0] * self.attn_heads, :dim, :dim]
-        print("attn arr shape final", np.array(jax.device_get(attn_arr)))
-        print('original attn arr', np.array(jax.device_get(attn_arr)))
-        attn_mask = NamedArray(attn_arr, attn_mask.axes)
+        #print('original attn arr', np.array(jax.device_get(attn_arr)))
+        #attn_arr = jnp.expand_dims(attn_arr, 0) + self.alibi
+        #print("attn arr shape", attn_arr.shape)
+        #attn_arr = attn_arr[:hidden_states.array.shape[0] * self.attn_heads, :dim, :dim]
+        #print("attn arr shape final", np.array(jax.device_get(attn_arr)))
+        #print('original attn arr', np.array(jax.device_get(attn_arr)))
+        #attn_mask = NamedArray(attn_arr, attn_mask.axes)
     
         hidden_states = self.transformer(hidden_states, attn_mask, inference=inference, key=k_transformer)
         lm_logits = self.embeddings.unembed(hidden_states)
