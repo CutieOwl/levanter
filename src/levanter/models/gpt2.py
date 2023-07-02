@@ -481,13 +481,13 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         self.attn_heads = config.num_heads
         slopes = jnp.array(get_slopes(self.attn_heads))
         self.alibi = jnp.expand_dims(jnp.expand_dims(slopes, 1), 1) * jnp.expand_dims(jnp.expand_dims(jnp.arange(maxpos), 0), 0).repeat(self.attn_heads, axis=0)
-        print("alibi 1", np.array(self.alibi))
+        print("alibi 1", np.array(jax.device_get(self.alibi)))
         print("alibi shape 1", self.alibi.shape)
         self.alibi = self.alibi.reshape(self.attn_heads, 1, maxpos)
-        print("alibi 1", np.array(self.alibi))
+        print("alibi 1", np.array(jax.device_get(self.alibi)))
         print("alibi shape 2", self.alibi.shape)
         self.alibi = jnp.tile(self.alibi, (config.seq_len // maxpos, 1, 1))
-        print("alibi 1", np.array(self.alibi))
+        print("alibi 1", np.array(jax.device_get((self.alibi)))
         print("alibi shape 3", self.alibi.shape)
 
     def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key):
@@ -500,11 +500,11 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         dim = hidden_states.array.shape[1]
         print("attn mask", attn_mask.axes)
         attn_arr = attn_mask.array
-        print('original attn arr', np.array(attn_arr))
+        print('original attn arr', np.array(jax.device_get(attn_arr)))
         attn_arr = jnp.expand_dims(attn_arr, 0) + self.alibi
         print("attn arr shape", attn_arr.shape)
         attn_arr = attn_arr[:hidden_states.array.shape[0] * self.attn_heads, :dim, :dim]
-        print("attn arr shape final", np.array(attn_arr))
+        print("attn arr shape final", np.array(jax.device_get(attn_arr)))
         jax.debug.print("end attn arr {}", attn_arr)
         attn_mask = NamedArray(attn_arr, attn_mask.axes)
     
