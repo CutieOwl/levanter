@@ -484,10 +484,10 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         print("alibi 1", np.array(jax.device_get(self.alibi)))
         print("alibi shape 1", self.alibi.shape)
         self.alibi = self.alibi.reshape(self.attn_heads, 1, maxpos)
-        print("alibi 1", np.array(jax.device_get(self.alibi)))
+        print("alibi 2", np.array(jax.device_get(self.alibi)))
         print("alibi shape 2", self.alibi.shape)
         self.alibi = jnp.tile(self.alibi, (config.seq_len // maxpos, 1, 1))
-        print("alibi 1", np.array(jax.device_get((self.alibi)))
+        print("alibi 3", np.array(jax.device_get(self.alibi)))
         print("alibi shape 3", self.alibi.shape)
 
     def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key):
