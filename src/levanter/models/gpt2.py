@@ -8,6 +8,8 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
+import numpy as np
+
 import haliax as hax
 import haliax.jax_utils
 import haliax.nn as hnn
@@ -479,13 +481,13 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         self.attn_heads = config.num_heads
         slopes = jnp.array(get_slopes(self.attn_heads))
         self.alibi = jnp.expand_dims(jnp.expand_dims(slopes, 1), 1) * jnp.expand_dims(jnp.expand_dims(jnp.arange(maxpos), 0), 0).repeat(self.attn_heads, axis=0)
-        jax.debug.print("alibi 1 {}", self.alibi)
+        print("alibi 1", np.array(self.alibi))
         print("alibi shape 1", self.alibi.shape)
         self.alibi = self.alibi.reshape(self.attn_heads, 1, maxpos)
-        jax.debug.print("alibi 2 {}", self.alibi)
+        print("alibi 1", np.array(self.alibi))
         print("alibi shape 2", self.alibi.shape)
         self.alibi = jnp.tile(self.alibi, (config.seq_len // maxpos, 1, 1))
-        jax.debug.print("alibi 3 {}", self.alibi)
+        print("alibi 1", np.array(self.alibi))
         print("alibi shape 3", self.alibi.shape)
 
     def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key):
@@ -498,11 +500,11 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         dim = hidden_states.array.shape[1]
         print("attn mask", attn_mask.axes)
         attn_arr = attn_mask.array
-        jax.debug.print('original attn arr {}', attn_arr)
+        print('original attn arr', np.array(attn_arr))
         attn_arr = jnp.expand_dims(attn_arr, 0) + self.alibi
         print("attn arr shape", attn_arr.shape)
         attn_arr = attn_arr[:hidden_states.array.shape[0] * self.attn_heads, :dim, :dim]
-        print("attn arr shape final", attn_arr.shape)
+        print("attn arr shape final", np.array(attn_arr))
         jax.debug.print("end attn arr {}", attn_arr)
         attn_mask = NamedArray(attn_arr, attn_mask.axes)
     
