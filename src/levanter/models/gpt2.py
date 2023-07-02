@@ -8,8 +8,6 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
-import numpy as np
-
 import haliax as hax
 import haliax.jax_utils
 import haliax.nn as hnn
@@ -432,8 +430,8 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
 class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
     transformer: Gpt2Transformer
     embeddings: Gpt2Embeddings
-    alibi: jnp.ndarray
-    attn_heads: int
+    #alibi: jnp.ndarray
+    #attn_heads: int
 
     @property
     def config(self):
@@ -464,6 +462,13 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
             key=k_embeddings,
         )
 
+    def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key):
+        if not inference and key is None:
+            raise ValueError("key must be provided for training")
+
+        k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
+        hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
+
         # Create ALiBi matrix
         def get_slopes(n):
             def get_slopes_power_of_2(n):
@@ -477,25 +482,18 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
                 closest_power_of_2 = 2**math.floor(math.log2(n))  #when the number of heads is not a power of 2, we use this workaround. 
                 return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
         
-        maxpos = config.seq_len
-        self.attn_heads = config.num_heads
-        slopes = jnp.array(get_slopes(self.attn_heads))
-        self.alibi = jnp.expand_dims(jnp.expand_dims(slopes, 1), 1) * jnp.expand_dims(jnp.expand_dims(jnp.arange(maxpos), 0), 0).repeat(self.attn_heads, axis=0)
+        maxpos = self.embeddings.SeqLen.size
+        attn_heads = self.transformer.config.num_heads
+        slopes = jnp.array(get_slopes(attn_heads))
+        self.alibi = jnp.expand_dims(jnp.expand_dims(slopes, 1), 1) * jnp.expand_dims(jnp.expand_dims(jnp.arange(maxpos), 0), 0).repeat(attn_heads, axis=0)
         #print("alibi 1", np.array(jax.device_get(self.alibi)))
         #print("alibi shape 1", self.alibi.shape)
-        self.alibi = self.alibi.reshape(self.attn_heads, 1, maxpos)
+        #self.alibi = self.alibi.reshape(attn_heads, 1, maxpos)
         #print("alibi 2", np.array(jax.device_get(self.alibi)))
         #print("alibi shape 2", self.alibi.shape)
-        self.alibi = jnp.tile(self.alibi, (config.seq_len // maxpos, 1, 1))
+        #self.alibi = jnp.tile(self.alibi, (config.seq_len // maxpos, 1, 1))
         #print("alibi 3", np.array(jax.device_get(self.alibi)))
         #print("alibi shape 3", self.alibi.shape)
-
-    def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key):
-        if not inference and key is None:
-            raise ValueError("key must be provided for training")
-
-        k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
-        hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
 
         #dim = hidden_states.array.shape[1]
         print("attn mask", attn_mask.axes)
