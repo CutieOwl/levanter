@@ -13,6 +13,7 @@ fi
 
 source $VENV/bin/activate
 
+pip install -e levanter-midi
 pip install -U pyrallis
 pip install -U torch torchvision torchaudio
 
