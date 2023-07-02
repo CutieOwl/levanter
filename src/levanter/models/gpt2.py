@@ -483,8 +483,8 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
                 return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
         
         print("hidden_states axes", hidden_states.axes)
-        Batch = hidden_states.axes[0]
-        batch = hidden_states.array.shape[0]
+        #Batch = hidden_states.axes[0]
+        #batch = hidden_states.array.shape[0]
 
         maxpos = self.embeddings.SeqLen.size
         attn_heads = self.transformer.config.num_heads
@@ -496,8 +496,8 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         )
         future_mask = jnp.expand_dims(future_mask, axis=0) + alibi
         print("future mask shape", future_mask.shape)
-        future_mask = jnp.tile(future_mask, (batch, 1, 1, 1))
-        future_attn_mask = NamedArray(future_mask, (Batch, self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
+        #future_mask = jnp.tile(future_mask, (batch, 1, 1, 1))
+        future_attn_mask = NamedArray(future_mask, (self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
         print("future attn mask axes", future_attn_mask.axes)
         #print("alibi 1", np.array(jax.device_get(self.alibi)))
         #print("alibi shape 1", self.alibi.shape)
