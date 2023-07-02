@@ -482,10 +482,21 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
                 closest_power_of_2 = 2**math.floor(math.log2(n))  #when the number of heads is not a power of 2, we use this workaround. 
                 return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
         
+        Batch = input_ids.axes[0]
+        batch = input_ids.array.shape[0]
+
         maxpos = self.embeddings.SeqLen.size
         attn_heads = self.transformer.config.num_heads
         slopes = jnp.array(get_slopes(attn_heads))
         alibi = jnp.expand_dims(jnp.expand_dims(slopes, 1), 1) * jnp.expand_dims(jnp.expand_dims(jnp.arange(maxpos), 0), 0).repeat(attn_heads, axis=0)
+        future_mask = jnp.triu(
+            jnp.full((maxpos, maxpos), -jnp.inf),
+            k=1
+        )
+        future_mask = jnp.expand_dims(future_mask, axis=0) + alibi
+        print("future mask shape", future_mask.shape)
+        future_mask = jnp.tile(future_mask, (batch, 1, 1, 1))
+        future_attn_mask = NamedArray(future_mask, (Batch, self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
         #print("alibi 1", np.array(jax.device_get(self.alibi)))
         #print("alibi shape 1", self.alibi.shape)
         #self.alibi = self.alibi.reshape(attn_heads, 1, maxpos)
@@ -496,8 +507,8 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         #print("alibi shape 3", self.alibi.shape)
 
         #dim = hidden_states.array.shape[1]
-        print("attn mask", attn_mask.axes)
-        attn_arr = attn_mask.array
+        #print("attn mask", attn_mask.axes)
+        #attn_arr = attn_mask.array
         #print('original attn arr', np.array(jax.device_get(attn_arr)))
         #attn_arr = jnp.expand_dims(attn_arr, 0) + self.alibi
         #print("attn arr shape", attn_arr.shape)
@@ -506,7 +517,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         #print('original attn arr', np.array(jax.device_get(attn_arr)))
         #attn_mask = NamedArray(attn_arr, attn_mask.axes)
     
-        hidden_states = self.transformer(hidden_states, attn_mask, inference=inference, key=k_transformer)
+        hidden_states = self.transformer(hidden_states, future_attn_mask, inference=inference, key=k_transformer)
         lm_logits = self.embeddings.unembed(hidden_states)
 
         return lm_logits
