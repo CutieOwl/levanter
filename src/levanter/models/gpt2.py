@@ -493,6 +493,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         attn_heads = self.transformer.config.num_heads
         slopes = jnp.array(get_slopes(attn_heads))
         alibi = jnp.expand_dims(jnp.expand_dims(slopes, 1), 1) * jnp.expand_dims(jnp.expand_dims(jnp.arange(maxpos), 0), 0).repeat(attn_heads, axis=0)
+        # alibi is now a matrix of shape (attn_heads, 1, maxpos)
         '''
         future_mask = jnp.triu(
             jnp.full((maxpos, maxpos), -jnp.inf),
@@ -502,11 +503,22 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         
         print("future mask shape", future_mask.shape)
         '''
+        future_mask = attn_mask.array
+        if len(hidden_states.axes) > 2:
+            #batch = hidden_states.axes[0].size
+            alibi = jnp.expand_dims(alibi, axis=0)
+            future_mask = jnp.expand_dims(future_mask, axis=1)
+            # now alibi has shape (batch, attn_heads, 1, maxpos)
+
         print("alibi shape", alibi.shape)
         print("attn mask", attn_mask.axes)
-        future_mask = attn_mask.array + alibi #+  jnp.zeros((attn_heads, maxpos, maxpos))
-        #future_mask = jnp.tile(future_mask, (batch, 1, 1, 1))
-        future_attn_mask = NamedArray(future_mask, (self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
+        future_mask = future_mask + alibi #+  jnp.zeros((attn_heads, maxpos, maxpos))
+        
+        if len(hidden_states.axes) > 2:
+            Batch = hidden_states.axes[0]
+            future_attn_mask = NamedArray(future_mask, (Batch, self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
+        else:
+            future_attn_mask = NamedArray(future_mask, (self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
         print("future attn mask axes", future_attn_mask.axes)
 
         hidden_states = self.transformer(hidden_states, future_attn_mask, inference=inference, key=k_transformer)
