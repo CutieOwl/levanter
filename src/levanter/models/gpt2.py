@@ -504,7 +504,7 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         '''
         print("alibi shape", alibi.shape)
         print("attn mask", attn_mask.axes)
-        future_mask = attn_mask.array  #+ alibi
+        future_mask = attn_mask.array + jnp.zeros((attn_heads, maxpos, maxpos)) #+ alibi
         #future_mask = jnp.tile(future_mask, (batch, 1, 1, 1))
         future_attn_mask = NamedArray(future_mask, (self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
         print("future attn mask axes", future_attn_mask.axes)
