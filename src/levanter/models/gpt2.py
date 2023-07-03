@@ -505,7 +505,9 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         '''
         future_mask = attn_mask.array
         if len(hidden_states.axes) > 2:
-            #batch = hidden_states.axes[0].size
+            batch = hidden_states.axes[0].size
+            if len(future_mask.shape) == 2:
+                future_mask = jnp.tile(future_mask, (batch, 1, 1))
             alibi = jnp.expand_dims(alibi, axis=0)
             future_mask = jnp.expand_dims(future_mask, axis=1)
             # now alibi has shape (batch, attn_heads, 1, maxpos)
