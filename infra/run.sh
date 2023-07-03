@@ -10,19 +10,19 @@ fi
 
 source $VENV/bin/activate
 
-pip install -U pip
-pip install -U wheel
+#pip install -U pip
+#pip install -U wheel
 
 # jax
-pip install -U "jax[tpu]==0.4.6" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+#pip install -U "jax[tpu]==0.4.6" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
-echo $VENV > levanter-midi/infra/venv_path.txt
+#echo $VENV > levanter-midi/infra/venv_path.txt
 
-cd levanter-midi
+#cd levanter-midi
 
-pip install -e .
+#pip install -e .
 
-pip install -U pyrallis
-pip install -U torch torchvision torchaudio
+#pip install -U pyrallis
+#pip install -U torch torchvision torchaudio
 
 PYTHONPATH=${LEV_ROOT}:${LEV_ROOT}/src:${LEV_ROOT}/examples:$PYTHONPATH "$@"

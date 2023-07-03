@@ -169,6 +169,9 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
             k = k.astype(jnp.float32)
 
         attn_scores = hax.dot(self.HeadDim, q, k)
+        print("attn_scores axes", attn_scores.axes)
+
+        print("mask axes", mask.axes)
 
         if mask is not None:
             attn_scores = attn_scores + (1.0 - mask) * -1e9
@@ -490,35 +493,22 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         attn_heads = self.transformer.config.num_heads
         slopes = jnp.array(get_slopes(attn_heads))
         alibi = jnp.expand_dims(jnp.expand_dims(slopes, 1), 1) * jnp.expand_dims(jnp.expand_dims(jnp.arange(maxpos), 0), 0).repeat(attn_heads, axis=0)
+        '''
         future_mask = jnp.triu(
             jnp.full((maxpos, maxpos), -jnp.inf),
             k=1
         )
         future_mask = jnp.expand_dims(future_mask, axis=0) + alibi
+        
         print("future mask shape", future_mask.shape)
+        '''
+        print("alibi shape", alibi.shape)
+        print("attn mask", attn_mask.axes)
+        future_mask = attn_mask.array + alibi
         #future_mask = jnp.tile(future_mask, (batch, 1, 1, 1))
         future_attn_mask = NamedArray(future_mask, (self.transformer.config.Heads, self.transformer.config.SeqLen, self.transformer.config.KeySeqLen))
         print("future attn mask axes", future_attn_mask.axes)
-        #print("alibi 1", np.array(jax.device_get(self.alibi)))
-        #print("alibi shape 1", self.alibi.shape)
-        #self.alibi = self.alibi.reshape(attn_heads, 1, maxpos)
-        #print("alibi 2", np.array(jax.device_get(self.alibi)))
-        #print("alibi shape 2", self.alibi.shape)
-        #self.alibi = jnp.tile(self.alibi, (config.seq_len // maxpos, 1, 1))
-        #print("alibi 3", np.array(jax.device_get(self.alibi)))
-        #print("alibi shape 3", self.alibi.shape)
 
-        #dim = hidden_states.array.shape[1]
-        #print("attn mask", attn_mask.axes)
-        #attn_arr = attn_mask.array
-        #print('original attn arr', np.array(jax.device_get(attn_arr)))
-        #attn_arr = jnp.expand_dims(attn_arr, 0) + self.alibi
-        #print("attn arr shape", attn_arr.shape)
-        #attn_arr = attn_arr[:hidden_states.array.shape[0] * self.attn_heads, :dim, :dim]
-        #print("attn arr shape final", np.array(jax.device_get(attn_arr)))
-        #print('original attn arr', np.array(jax.device_get(attn_arr)))
-        #attn_mask = NamedArray(attn_arr, attn_mask.axes)
-    
         hidden_states = self.transformer(hidden_states, future_attn_mask, inference=inference, key=k_transformer)
         lm_logits = self.embeddings.unembed(hidden_states)
 
