@@ -174,7 +174,7 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
         print("mask axes", mask.axes)
 
         if mask is not None:
-            attn_scores = attn_scores + (1.0 - mask) * -1e9
+            attn_scores = attn_scores + mask
 
         attn_weights = hnn.softmax(attn_scores, axis=self.KeySeqLen).astype(hidden_states.dtype)
         attn_weights = self.dropout(attn_weights, key=key, inference=inference)
