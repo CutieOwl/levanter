@@ -18,7 +18,7 @@ model:
   resid_pdrop: 0.1
 trainer:
   mp: p=f32,c=bfloat16
-  learning_rate: 6E-4
+  learning_rate: 1E-4
   weight_decay: 0.1
   model_axis_size: 2
   per_device_parallelism: 1
