@@ -9,7 +9,7 @@ data:
   enforce_eos: False
 model:
   hidden_dim: 768
-  num_heads: 8
+  num_heads: 16
   num_layers: 12
   seq_len: 32768
   gradient_checkpointing: true
@@ -20,7 +20,7 @@ trainer:
   mp: p=f32,c=bfloat16
   learning_rate: 1E-4
   weight_decay: 0.1
-  model_axis_size: 8
+  model_axis_size: 32
   per_device_parallelism: 1
   num_train_steps: 115000
   train_batch_size: 16
