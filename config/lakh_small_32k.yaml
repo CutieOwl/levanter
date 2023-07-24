@@ -20,7 +20,7 @@ trainer:
   mp: p=f32,c=bfloat16
   learning_rate: 1E-4
   weight_decay: 0.1
-  model_axis_size: 8
+  model_axis_size: 16
   per_device_parallelism: 1
   num_train_steps: 115000
   train_batch_size: 16
