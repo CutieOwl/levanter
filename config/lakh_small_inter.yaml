@@ -27,8 +27,6 @@ trainer:
   checkpointer:
     base_path: gs://levanter-eu/lakh-checkpoints/
     save_interval: 30m
-    keep:
-       - every: 5000
 
   axis_resources:
     batch: "data"
