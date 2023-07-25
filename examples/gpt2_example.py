@@ -151,8 +151,9 @@ def main(config: TrainGpt2Config):
 
                 return loss.scalar()
 
+        @named_pjit(axis_resources=parameter_axis_mapping)
         def compute_train_loss(model, input_ids, attn_mask, key=None):
-            return compute_loss(model, input_ids, attn_mask, key, inference=True)
+            return hax.mean(compute_loss(model, input_ids, attn_mask, key, inference=True)).scalar()
 
         # training loop
         # donate args to conserve memory
