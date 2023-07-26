@@ -152,7 +152,7 @@ def main(config: TrainGpt2Config):
                 return loss.scalar()
 
         def compute_train_loss(model, input_ids, attn_mask, key=None):
-            return hax.mean(compute_loss(model, input_ids, attn_mask, key, inference=True))
+            return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=True))
         
         # training loop
         # donate args to conserve memory
