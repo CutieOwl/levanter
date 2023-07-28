@@ -154,7 +154,7 @@ def main(config: TrainGpt2Config):
 
                 return loss.scalar()
 
-        def train_batch_loss(model, input_ids, attn_mask, key=None):
+        def compute_train_loss(model, input_ids, attn_mask, key):
             return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=False))
         
         # training loop
@@ -171,7 +171,7 @@ def main(config: TrainGpt2Config):
             attn_mask = hax.auto_sharded(attn_mask)
 
             loss, grads = accumulate_gradients_sharded(
-                eqx.filter_value_and_grad(train_batch_loss),
+                eqx.filter_value_and_grad(compute_train_loss),
                 Batch,
                 model,
                 input_ids,
