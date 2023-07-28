@@ -173,7 +173,7 @@ def main(config: TrainGpt2Config):
                 model,
                 input_ids,
                 attn_mask,
-                key=key,
+                key=None,
                 per_device_parallelism=config.trainer.per_device_parallelism,
                 parameter_axis_mapping=parameter_axis_mapping,
             )
