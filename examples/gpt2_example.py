@@ -234,7 +234,7 @@ def main(config: TrainGpt2Config):
             )
 
             if checkpoint is not None:
-                model, (opt_state_discard, training_key), resume_step_discard = checkpoint
+                model, (opt_state, training_key), resume_step = checkpoint
                 assert training_key.shape == jrandom.PRNGKey(0).shape
             elif config.trainer.load_checkpoint_path:
                 raise ValueError("No checkpoint found")
@@ -242,7 +242,6 @@ def main(config: TrainGpt2Config):
                 logger.info("No checkpoint found. Starting from scratch")
 
         # NOTE: removing the following for finetuning so we resume at step 0
-        '''
         if resume_step is not None:
             # step is after the batch, so we need to seek to step
             # TODO: iter_data.seek(resume_step +1)
@@ -252,7 +251,6 @@ def main(config: TrainGpt2Config):
                 next(iter_data)
             resume_step = resume_step + 1
         else:
-        '''
         resume_step = 0
         
             
