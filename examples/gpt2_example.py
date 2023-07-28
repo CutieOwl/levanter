@@ -251,7 +251,7 @@ def main(config: TrainGpt2Config):
                 next(iter_data)
             resume_step = resume_step + 1
         else:
-        resume_step = 0
+            resume_step = 0
         
             
         # finally, run the training loop
