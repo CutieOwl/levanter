@@ -13,6 +13,7 @@ from jax.experimental.global_device_array import GlobalDeviceArray
 from jax.experimental.pjit import FROM_GDA, pjit, with_sharding_constraint
 from jax.interpreters.pxla import PartitionSpec
 from jax.lax import with_sharding_constraint
+from jax.sharding import Mesh, NamedSharding, PartitionSpec, SingleDeviceSharding
 from jaxtyping import PyTree
 
 from .core import NamedArray
@@ -89,7 +90,7 @@ def _is_jit_tracer(x) -> bool:
     return isinstance(x, jax.core.Tracer)
 
 
-def shard_with_axis_mapping(x: T, mapping: ResourceMapping) -> T:
+def shard_with_axis_mapping(x: T, mapping: ResourceMapping, mesh: Optional[Mesh] = None) -> T:
     """
     Shard a PyTree using the provided axis mapping. NamedArrays in the PyTree are sharded using the axis mapping.
     Other arrays are not sharded.
@@ -111,7 +112,7 @@ def shard_with_axis_mapping(x: T, mapping: ResourceMapping) -> T:
             current_sharding = raw_x.sharding
 
             desired_sharding = infer_resource_partitions(
-                x, mapping, preserve_existing_shardings=False
+                x, mapping, mesh=mesh, preserve_existing_shardings=False
             ).array
 
             if current_sharding.is_equivalent_to(desired_sharding, ndim=raw_x.ndim):
@@ -130,7 +131,13 @@ def shard_with_axis_mapping(x: T, mapping: ResourceMapping) -> T:
     return jax.tree_util.tree_map(_do_device_put, x, is_leaf=is_named_array)
 
 
-def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceMapping] = None) -> PyTree:
+def _get_mesh():
+    from jax.experimental.maps import thread_resources
+
+    return thread_resources.env.physical_mesh
+
+
+def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceMapping] = None, preserve_existing_shardings: bool = True) -> PyTree:
     """
     Infer the resource partitions for a module, to be used with pjit.
     The basic idea is to tree all NamedArrays as leaves for the purposes of this function,
@@ -146,18 +153,30 @@ def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceM
 
     _resource_mapping = typing.cast(ResourceMapping, resource_mapping)  # for mypy
 
+    mesh = mesh or _get_mesh()
+
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
-            return NamedArray(
-                PartitionSpec(*tuple(_resource_mapping.get(axis.name, None) for axis in node.axes)),  # type: ignore
-                node.axes,
-            )
-        elif isinstance(node, GlobalDeviceArray):
-            return FROM_GDA
-        elif hasattr(node, "sharding"):
-            return node.sharding
+            if preserve_existing_shardings:
+                current_sharding = getattr(node, "sharding", None)
+            else:
+                current_sharding = None
+
+            if current_sharding is not None:
+                return NamedArray(current_sharding, node.axes)  # type: ignore
+            else:
+                sharding = NamedSharding(mesh, pspec_for_axis(node.axes, _resource_mapping))
+                return NamedArray(sharding, node.axes)  # type: ignore
         else:
-            return None
+            sharding = getattr(node, "sharding", None)
+            # TODO: these are usually replicated. Is there a better way to tell?
+            if isinstance(sharding, SingleDeviceSharding):
+                return NamedSharding(mesh, PartitionSpec(None))
+            elif sharding is not None:
+                return sharding
+            elif node.shape == ():
+                return NamedSharding(mesh, PartitionSpec())
+            return NamedSharding(mesh, PartitionSpec(None))
 
     return jax.tree_util.tree_map(partition_spec, tree, is_leaf=is_named_array)
 
