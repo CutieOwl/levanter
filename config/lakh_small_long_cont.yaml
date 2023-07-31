@@ -11,20 +11,19 @@ model:
   hidden_dim: 768
   num_heads: 12
   num_layers: 12
-  seq_len: 16384
-  gradient_checkpointing: true
+  seq_len: 1024
   scale_attn_by_inverse_layer_idx: true
   embed_pdrop: 0.1
   resid_pdrop: 0.1
 trainer:
   mp: p=f32,c=bfloat16
-  learning_rate: 1E-4
+  learning_rate: 1E-5
   weight_decay: 0.1
   model_axis_size: 2
   per_device_parallelism: 1
-  num_train_steps: 230000
-  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/lemon-feather-52/step-9768"
-  train_batch_size: 16
+  num_train_steps: 15000
+  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/young-resonance-84/step-100000"
+  train_batch_size: 32
 
   checkpointer:
     base_path: gs://levanter-eu/lakh-checkpoints/
