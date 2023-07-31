@@ -91,12 +91,15 @@ def accumulate_gradients_sharded(
     # third, we want to do compute.
     def loop(acc, microbatch_key):
         loss, grad = acc
-        microbatch, key = microbatch_key
+        microbatch, m_key = microbatch_key
         print("microbatch", microbatch)
-        print('key', key)
+        print('m_key', m_key)
         print("microbatch key", microbatch_key)
         with jax.named_scope("grad"):
-            this_loss, this_grad = f(model, *microbatch, key=key)
+            if key is not None:
+                this_loss, this_grad = f(model, *microbatch, key=m_key)
+            else:
+                this_loss, this_grad = f(model, *microbatch)
             this_grad = hax.partitioning.shard_with_axis_mapping(this_grad, parameter_axis_mapping)
 
         with jax.named_scope("accum"):
@@ -106,7 +109,7 @@ def accumulate_gradients_sharded(
 
         return loss, grad
 
-    loss, grad = hax.fold(loop, AccumStep)((loss, grad), (inputs, key))
+    loss, grad = hax.fold(loop, AccumStep)(acc=(loss, grad), microbatch_key=(inputs, key))
 
     return loss / num_micro_steps, jax.tree_map(lambda x: x / num_micro_steps, grad)
 
