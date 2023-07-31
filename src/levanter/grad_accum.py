@@ -4,7 +4,7 @@ import jax
 from jax import numpy as jnp
 from jax.random import PRNGKey
 from jax.experimental.pjit import with_sharding_constraint
-from jax.interpreters.pxla import PartitionSpec
+from jax.sharding import PartitionSpec
 
 import haliax as hax
 from haliax import Axis
@@ -43,6 +43,7 @@ def accumulate_gradients_sharded(
     key: Optional[PRNGKey] = None,
     per_device_parallelism: int,
     parameter_axis_mapping,
+    reduction="mean",
 ) -> Tuple[float, M]:
     """
     Accumulate gradients across a sharded batch, keeping a local copy of the gradient on each row of the data
@@ -108,7 +109,12 @@ def accumulate_gradients_sharded(
 
     loss, grad = hax.fold(loop, AccumStep)((loss, grad), (inputs, key))
 
-    return loss / num_micro_steps, jax.tree_map(lambda x: x / num_micro_steps, grad)
+    if reduction == "sum":
+        return loss, grad
+    elif reduction == "mean":
+        return loss / num_micro_steps, jax.tree_map(lambda x: x / num_micro_steps, grad)
+    else:
+        raise ValueError(f"Unknown reduction: {reduction}")
 
 
 def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inputs, axis_mapping):

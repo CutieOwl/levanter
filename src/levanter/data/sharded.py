@@ -1,3 +1,4 @@
+import functools
 import itertools
 from functools import cached_property
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar, Union
@@ -5,13 +6,13 @@ from typing import Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar, Uni
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.experimental.global_device_array import GlobalDeviceArray
 from jax.experimental.multihost_utils import process_allgather
-from jax.interpreters.pxla import Mesh, PartitionSpec
+from jax.sharding import Mesh, PartitionSpec
 from jaxtyping import Array, PyTree
 
 import haliax as hax
 import levanter.mesh
+from haliax import NamedArray
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
 from levanter.data import Dataset
@@ -67,6 +68,7 @@ class GlobalBatchDataset(Dataset[PyTree[jax.Array]]):
         if not override_process_data_groups:
             assert num_data_process_groups <= jax.process_count()
 
+        self.process_data_pos = process_data_pos
         self.num_data_process_groups = num_data_process_groups
         assert self.Batch.size % num_data_process_groups == 0
 
@@ -74,6 +76,8 @@ class GlobalBatchDataset(Dataset[PyTree[jax.Array]]):
 
     def __iter__(self) -> Iterator[PyTree[jax.Array]]:
         one_item_generator = iter(self.local_dataset)
+
+        shape_leaves, shape_structure = jax.tree_util.tree_flatten(self.item_shape)
 
         for _ in range(self._global_min_length):
             # ok this is a bit messy: we want to create a batch of items from our dataset, only loading
@@ -85,33 +89,29 @@ class GlobalBatchDataset(Dataset[PyTree[jax.Array]]):
             # So it's more that we have a LocalBatch[PyTree[Array]] and we want to produce a PyTree[GlobalBatch[Array]]
             # because more than one device can get the same data, we need to make sure we only load it once since we're
             # streaming. This is the cache
-            local_batch_leaves: Dict[Tuple[int, int], List[Array]] = {}  # batch indices -> list of items
-            batch_tree_structure = None
+            stacked_local_batches: Dict[
+                Tuple[int, int], List[Union[Array, NamedArray]]
+            ] = {}  # batch indices -> list of items
 
-            total_examples_accessed_this_step = 0
+            batch_offset = self.process_data_pos * self.local_batch_size
+            local_batch: List[PyTree] = list(itertools.islice(one_item_generator, self.local_batch_size))
 
             def get_local_batch(begin: int, end: int) -> List[Array]:
-                nonlocal batch_tree_structure, total_examples_accessed_this_step
+                assert begin >= batch_offset
 
                 key = (begin, end)
-                if key in local_batch_leaves:
-                    return local_batch_leaves[key]
+                if key in stacked_local_batches:
+                    return stacked_local_batches[key]
 
-                num_examples_for_this_device = end - begin
-                total_examples_accessed_this_step += num_examples_for_this_device
-                individual_datums = list(itertools.islice(one_item_generator, num_examples_for_this_device))
+                individual_datums = local_batch[(begin - batch_offset) : (end - batch_offset)]
 
-                local_batch = jax.tree_map(self._stack_leaves_unchecked, *individual_datums, is_leaf=is_named_array)
-                batch_leaves, _batch_structure = jax.tree_util.tree_flatten(local_batch)
+                with hax.enable_shape_checks(False):
+                    device_batch = _stack_tree(self.Batch, individual_datums)
+                batch_leaves = jax.tree_util.tree_leaves(device_batch)
 
-                if batch_tree_structure is None:
-                    batch_tree_structure = _batch_structure
-
-                local_batch_leaves[key] = batch_leaves
+                stacked_local_batches[key] = batch_leaves
 
                 return batch_leaves
-
-            shape_leaves = jax.tree_util.tree_leaves(self.item_shape)
 
             # Callback passed to jax.make_array_from_callback to get the data for each device
             def get_local_data_for_leaf(indices: _TensorSliceIndex, leaf_index: int) -> Array:
@@ -119,27 +119,30 @@ class GlobalBatchDataset(Dataset[PyTree[jax.Array]]):
                 begin, end, _ = batch_slice.indices(self.Batch.size)
                 local_batch = get_local_batch(begin, end)
                 leaf = local_batch[leaf_index]
-                return leaf[(..., *indices[1:])]
+                other_indices = indices[1:]
+                if all(idx == slice(None) for idx in other_indices):
+                    return leaf
+                else:
+                    return leaf[(..., *indices[1:])]
+
+            def make_global_array_for_leaf(leaf_index, item_leaf_shape: Union[ShapeSpec, NamedShapeSpec]):
+                raw_array = jax.make_array_from_callback(
+                    to_raw_shape(item_leaf_shape),
+                    jax.sharding.NamedSharding(self.mesh, self._pspec_for(item_leaf_shape)),
+                    lambda indices: get_local_data_for_leaf(indices, leaf_index),
+                )
+                if isinstance(item_leaf_shape, NamedShapeSpec):
+                    return hax.NamedArray(raw_array, item_leaf_shape.shape)
+                else:
+                    return raw_array
 
             # TODO: with a bit more fanciness, we can avoid needing the item_shape
             gda_leaves = [
-                # jax.make_array_from_callback(
-                #     to_raw_shape(shape),
-                #     jax.sharding.NamedSharding(self.mesh, self._pspec_for(shape)),
-                #     lambda indices: get_local_data_for_leaf(indices, leaf_index),
-                # )
-                GlobalDeviceArray.from_callback(
-                    to_raw_shape(shape),
-                    self.mesh,
-                    self._pspec_for(shape),
-                    lambda indices: get_local_data_for_leaf(indices, leaf_index),
-                )
-                for leaf_index, shape in enumerate(shape_leaves)
+                make_global_array_for_leaf(leaf_index, shape) for leaf_index, shape in enumerate(shape_leaves)
             ]
 
-            assert total_examples_accessed_this_step == self.local_batch_size
+            gda_tree = jax.tree_util.tree_unflatten(shape_structure, gda_leaves)
 
-            gda_tree = jax.tree_util.tree_unflatten(batch_tree_structure, gda_leaves)
             yield gda_tree  # type: ignore
 
     def _pspec_for(self, shape_spec: Union[ShapeSpec, NamedShapeSpec]) -> PartitionSpec:
@@ -201,3 +204,14 @@ class GlobalBatchDataset(Dataset[PyTree[jax.Array]]):
                 return hax.stack(self.Batch, leaves)
         else:
             return np.stack(leaves)
+
+
+@functools.partial(jax.jit, static_argnums=(0,))
+def _stack_tree(batch, individual_datums):
+    def _stack_leaves_unchecked(*leaves):
+        if is_named_array(leaves[0]):
+                return hax.stack(batch, leaves)
+        else:
+            return jnp.stack(leaves)
+
+    return jax.tree_map(_stack_leaves_unchecked, *individual_datums, is_leaf=is_named_array)
