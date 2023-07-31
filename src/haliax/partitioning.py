@@ -137,7 +137,7 @@ def _get_mesh():
     return thread_resources.env.physical_mesh
 
 
-def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceMapping] = None, preserve_existing_shardings: bool = True) -> PyTree:
+def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceMapping] = None, preserve_existing_shardings: bool = True, mesh: Optional[Mesh] = None) -> PyTree:
     """
     Infer the resource partitions for a module, to be used with pjit.
     The basic idea is to tree all NamedArrays as leaves for the purposes of this function,
