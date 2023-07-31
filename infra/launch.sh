@@ -20,6 +20,4 @@ fi
 
 source $VENV/bin/activate
 
-pip install -U “jax[tpu]==0.4.14” -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
-
 PYTHONPATH=${LEV_ROOT}:${LEV_ROOT}/src:${LEV_ROOT}/examples:$PYTHONPATH nohup "$@" >& "~/log-$(hostname).log" &
