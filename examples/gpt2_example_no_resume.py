@@ -150,6 +150,7 @@ def main(config: TrainGpt2Config):
 
                 return loss.scalar()
 
+        @named_pjit(axis_resources=parameter_axis_mapping)
         def train_batch_loss(model, input_ids, attn_mask, key):
             return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=False))
 
