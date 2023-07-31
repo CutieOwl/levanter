@@ -12,6 +12,7 @@ from equinox.compile_utils import compile_cache, get_fun_names, hashable_combine
 from jax.experimental.global_device_array import GlobalDeviceArray
 from jax.experimental.pjit import FROM_GDA, pjit, with_sharding_constraint
 from jax.interpreters.pxla import PartitionSpec
+from jax.lax import with_sharding_constraint
 from jaxtyping import PyTree
 
 from .core import NamedArray
@@ -82,6 +83,12 @@ def auto_sharded(x: T) -> T:
     return shard_with_axis_mapping(x, mapping)
 
 
+def _is_jit_tracer(x) -> bool:
+    if isinstance(x, NamedArray):
+        x = x.array
+    return isinstance(x, jax.core.Tracer)
+
+
 def shard_with_axis_mapping(x: T, mapping: ResourceMapping) -> T:
     """
     Shard a PyTree using the provided axis mapping. NamedArrays in the PyTree are sharded using the axis mapping.
@@ -92,21 +99,35 @@ def shard_with_axis_mapping(x: T, mapping: ResourceMapping) -> T:
     :return:
     """
 
-    def _as_pspec(x):
-        if isinstance(x, NamedArray):
-            physical_names: List[Optional[PhysicalAxisSpec]] = [mapping.get(a.name, None) for a in x.axes]
-        elif is_array(x):
-            physical_names = [None] * len(x.shape)
+    def _do_device_put(x):
+        if not is_named_array(x):
+            return x
+
+        if _is_jit_tracer(x.array):
+            pspec = pspec_for_axis(x.axes, mapping)
+            return with_sharding_constraint(x, pspec)
         else:
-            return None
+            raw_x = x.array
+            current_sharding = raw_x.sharding
 
-        spec = PartitionSpec(
-            *tuple(tuple(p) if not (isinstance(p, str)) and isinstance(p, Sequence) else p for p in physical_names)
-        )
-        return spec
+            desired_sharding = infer_resource_partitions(
+                x, mapping, preserve_existing_shardings=False
+            ).array
 
-    pspec = jax.tree_util.tree_map(_as_pspec, x, is_leaf=is_named_array)
-    return with_sharding_constraint(x, pspec)
+            if current_sharding.is_equivalent_to(desired_sharding, ndim=raw_x.ndim):
+                return x
+            elif desired_sharding.is_fully_addressable:
+                raw_x = jax.device_put(raw_x, desired_sharding)
+                return NamedArray(raw_x, x.axes)
+            else:
+                # if the sharding is not fully addressable, we can't use device_put, so we use this hacky workaround.
+                # TODO: we lose "src" information, but i think that's only for autodiff, and this isn't an autodiff
+                # context, I think?
+                shape = raw_x.shape
+                raw_x = jax.make_array_from_callback(shape, desired_sharding, lambda index: raw_x[index])
+                return NamedArray(raw_x, x.axes)
+
+    return jax.tree_util.tree_map(_do_device_put, x, is_leaf=is_named_array)
 
 
 def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceMapping] = None) -> PyTree:

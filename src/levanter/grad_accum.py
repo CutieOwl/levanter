@@ -92,9 +92,9 @@ def accumulate_gradients_sharded(
     def loop(acc, microbatch_key):
         loss, grad = acc
         microbatch, m_key = microbatch_key
-        print("microbatch", microbatch)
-        print('m_key', m_key)
-        print("microbatch key", microbatch_key)
+        #print("microbatch", microbatch)
+        #print('m_key', m_key)
+        #print("microbatch key", microbatch_key)
         with jax.named_scope("grad"):
             if key is not None:
                 this_loss, this_grad = f(model, *microbatch, key=m_key)
