@@ -9,8 +9,6 @@ from chex import PRNGKey
 from jax import lax
 from jax import numpy as jnp
 from jax import random as jrandom
-from jax.experimental.global_device_array import GlobalDeviceArray
-from jax.interpreters.pxla import PartitionSpec
 from jaxtyping import PyTree
 
 from haliax.jax_utils import is_jax_array_like, shaped_rng_split
@@ -77,46 +75,6 @@ def set_hardware_rng_ops(enabled: bool = True):
         jax.config.update("jax_default_prng_impl", "unsafe_rbg")
     else:
         jax.config.update("jax_default_prng_impl", "threefry2x32")
-
-
-def global_key_array(key: PRNGKey, global_shape, mesh, mesh_axes):
-    """
-    Create a global array with the given key. This ensures that:
-    * individual keys at positions are unique
-    * the same key is made for the same position in all devices that have that position
-    """
-
-    # add key shape to global_shape and pad out axes
-    global_shape = ensure_tuple(global_shape)
-    orig_global_shape = global_shape
-    global_shape = global_shape + key.shape
-    mesh_axes = list(mesh_axes) + [None] * (len(global_shape) - len(mesh_axes))
-    mesh_axes = PartitionSpec(*mesh_axes)
-
-    assert len(global_shape) == len(mesh_axes)
-
-    def data_callback(index: Tuple[slice, ...]):
-        # we take advantage of the fact that the start indices are non-overlapping across machines (except
-        # when they're identical) so we can use the index to make the keys unique
-        indices = [s.indices(x) for s, x in zip(index, global_shape)]
-        starts = [i[0] for i in indices]
-        base_key = ft.reduce(jrandom.fold_in, (s for s in starts), key)
-
-        assert all(i[2] == 1 for i in indices)
-        lens = [i[1] - i[0] for i in indices]
-        return shaped_rng_split(base_key, lens[0 : len(orig_global_shape)])
-
-    # return jax.make_array_from_callback(
-    #     global_shape,
-    #     jax.sharding.MeshPspecSharding(mesh=mesh, spec=mesh_axes),
-    #     data_callback=data_callback,
-    # )
-    return GlobalDeviceArray.from_callback(
-        global_shape=global_shape,
-        global_mesh=mesh,
-        mesh_axes=mesh_axes,
-        data_callback=data_callback,
-    )
 
 
 @jax.tree_util.register_pytree_node_class

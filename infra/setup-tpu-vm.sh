@@ -34,7 +34,7 @@ pip install -U pip
 pip install -U wheel
 
 # jax
-pip install -U "jax[tpu]==0.4.6" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+pip install -U "jax[tpu]==0.4.14" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # clone levanter
 git clone --branch nope https://github.com/CutieOwl/levanter-midi.git

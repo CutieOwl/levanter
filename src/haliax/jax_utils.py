@@ -5,7 +5,6 @@ import equinox as eqx
 import jax
 import numpy as np
 from chex import PRNGKey
-from equinox.module import Static
 from jax import numpy as jnp
 from jax import random as jrandom
 from jaxtyping import PyTree
@@ -35,24 +34,6 @@ def maybe_rng_split(key: Optional[PRNGKey], num: int = 2):
         return jnp.reshape(key, (1,) + key.shape)
     else:
         return jrandom.split(key, num)
-
-
-def filter_eval_shape(fun: Callable, *args, **kwargs):
-    """As `jax.eval_shape`, but allows any Python object as inputs and outputs, including
-    GlobalDeviceArrays (which equinox.filter_eval_shape does not support).
-    """
-
-    # TODO: file a bug
-
-    def _fn(_static, _dynamic):
-        _args, _kwargs = eqx.combine(_static, _dynamic)
-        _out = fun(*_args, **_kwargs)
-        _dynamic_out, _static_out = eqx.partition(_out, is_jax_array_like)
-        return _dynamic_out, Static(_static_out)
-
-    dynamic, static = eqx.partition((args, kwargs), is_jax_array_like)
-    dynamic_out, static_out = jax.eval_shape(ft.partial(_fn, static), dynamic)
-    return eqx.combine(dynamic_out, static_out.value)
 
 
 def is_jax_array_like(x):

@@ -1,4 +1,5 @@
 import logging
+import os
 from dataclasses import dataclass
 from functools import partial
 
@@ -30,6 +31,15 @@ from py_utils import non_caching_cycle
 
 
 logger = logging.getLogger(__name__)
+
+COMPARE_GRAD_ACCUM = False
+
+# jax.config.update("jax_debug_nans", True)
+jax.config.update("jax_default_prng_impl", "unsafe_rbg")
+assert "--xla_tpu_spmd_rng_bit_generator_unsafe=true" in os.environ.get("LIBTPU_INIT_ARGS", ""), "Must set LIBTPU_INIT_ARGS to include --xla_tpu_spmd_rng_bit_generator_unsafe=true"
+# Jax version too old for this:
+# jax.config.update("threefry_partitionable", True)
+
 
 # cf https://github.com/google-research/language/blob/aa58066bec83d30de6c8f9123f0af7b81db3aeba/language/mentionmemory/training/trainer.py
 
@@ -152,8 +162,8 @@ def main(config: TrainGpt2Config):
                 return loss.scalar()
 
         def compute_train_loss(model, input_ids, attn_mask, key):
-            return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=False))
-        
+            return compute_loss(model, input_ids, attn_mask, key, inference=False)
+
         # training loop
         # donate args to conserve memory
         @named_pjit(axis_resources=parameter_axis_mapping, donate_args=True)
@@ -177,6 +187,19 @@ def main(config: TrainGpt2Config):
                 per_device_parallelism=config.trainer.per_device_parallelism,
                 parameter_axis_mapping=parameter_axis_mapping,
             )
+
+            if COMPARE_GRAD_ACCUM:
+                simple_v, simple_grads = eqx.filter_value_and_grad(compute_train_loss)(model, input_ids, attn_mask, key=key)
+
+                jax.debug.print("no grad accum {}", simple_v)
+                jax.debug.print("grad accum {}", loss)
+
+                for (simple_g, g) in zip(jax.tree_util.tree_leaves(simple_grads), jax.tree_util.tree_leaves(grads)):
+                    rel_diff = jnp.abs((simple_g - g) / jnp.maximum(jnp.abs(simple_g), jnp.abs(g)))
+                    abs_diff = jnp.abs(simple_g - g)
+
+                    jax.debug.print("{} {}", rel_diff, abs_diff)
+
 
             # distribute gradients across the mesh and apply them
             updates, opt_state = optimizer.update(grads, opt_state, params=model)

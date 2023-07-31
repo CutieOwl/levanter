@@ -58,7 +58,12 @@ def test_accumulate_gradients_sharded():
         v, g = grad_fn(mlp, x)
 
         assert jnp.allclose(acc_v, v)
+<<<<<<< HEAD
         assert jax.tree_util.tree_all(jax.tree_util.tree_map(lambda x, y: jnp.allclose(x, y), acc_g, g))
+=======
+        for g1, g2 in zip(jax.tree_util.tree_leaves(acc_g), jax.tree_util.tree_leaves(g)):
+            assert jnp.allclose(g1, g2)
+>>>>>>> dlwh-nope_grad_accum
 
 
 
