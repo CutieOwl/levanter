@@ -109,7 +109,7 @@ def accumulate_gradients_sharded(
 
         return loss, grad
 
-    loss, grad = hax.fold(loop, AccumStep)(acc=(loss, grad), microbatch_key=(inputs, key))
+    loss, grad = hax.fold(loop, AccumStep)((loss, grad), (inputs, key))
 
     return loss / num_micro_steps, jax.tree_map(lambda x: x / num_micro_steps, grad)
 
