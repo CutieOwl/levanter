@@ -86,7 +86,10 @@ def accumulate_gradients_sharded(
         grad = hax.partitioning.shard_with_axis_mapping(grad, parameter_axis_mapping)
 
     # second, we want to reshape our data to (num_micro_steps, micro_batch_size, ...), sharded along the data axis
+    print("inputs before reshape", inputs)
     inputs = _reshape_for_microbatch(Batch, Microbatch, AccumStep, inputs, parameter_axis_mapping)
+    print("inputs after reshape", inputs)
+    print("key in grad_accum", key)
 
     # third, we want to do compute.
     def loop(acc, microbatch_key):
