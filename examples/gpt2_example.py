@@ -131,9 +131,9 @@ def main(config: TrainGpt2Config):
 
         # loss function: this computes the loss with respect to a single example
         def compute_loss(model: Gpt2LMHeadModel, input_ids, attn_mask, key, inference):
+            print("compute_loss input_ids", input_ids)
+            print("compute_loss key", key)
             with hax.axis_mapping(compute_axis_mapping):
-                print("compute_loss input_ids", input_ids)
-                print("compute_loss key", key)
                 model = mp.cast_to_compute(model)
 
                 pred_y = model(input_ids, attn_mask, key=key, inference=inference)
@@ -167,6 +167,7 @@ def main(config: TrainGpt2Config):
             attn_mask = hax.auto_sharded(attn_mask)
 
             print("train_step input_ids", input_ids)
+            print("keys", keys)
             loss, grads = accumulate_gradients_sharded(
                 eqx.filter_value_and_grad(train_batch_loss),
                 Batch,
