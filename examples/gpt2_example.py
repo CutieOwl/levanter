@@ -162,6 +162,7 @@ def main(config: TrainGpt2Config):
             attn_mask = hax.vmap(attention_mask, Batch)(False, keys)
             attn_mask = hax.auto_sharded(attn_mask)
 
+            print("train_step input_ids", input_ids)
             loss, grads = accumulate_gradients_sharded(
                 eqx.filter_value_and_grad(train_batch_loss),
                 Batch,
@@ -262,7 +263,8 @@ def main(config: TrainGpt2Config):
                     input_ids = next(iter_data)
                     input_ids = hax.named(input_ids, (Batch, SeqLen))
                     my_key, training_key = jrandom.split(training_key, 2)
-
+                
+                print("input_ids", input_ids)
                 step_loss, model, opt_state = train_step(model, opt_state, input_ids, my_key)
                 step_loss = step_loss.item()
 
