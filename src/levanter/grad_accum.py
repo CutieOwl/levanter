@@ -119,6 +119,7 @@ def accumulate_gradients_sharded(
 
 
 def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inputs, axis_mapping):
+    ''''
     def _reshape(x):
         if is_named_array(x):
             x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
@@ -132,3 +133,6 @@ def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inpu
             return x
 
     return jax.tree_util.tree_map(_reshape, inputs, is_leaf=is_named_array)
+    '''
+    x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
+    return hax.shard_with_axis_mapping(x, axis_mapping)
