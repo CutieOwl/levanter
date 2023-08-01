@@ -132,6 +132,8 @@ def main(config: TrainGpt2Config):
         # loss function: this computes the loss with respect to a single example
         def compute_loss(model: Gpt2LMHeadModel, input_ids, attn_mask, key, inference):
             with hax.axis_mapping(compute_axis_mapping):
+                print("compute_loss input_ids", input_ids)
+                print("compute_loss key", key)
                 model = mp.cast_to_compute(model)
 
                 pred_y = model(input_ids, attn_mask, key=key, inference=inference)
@@ -152,6 +154,8 @@ def main(config: TrainGpt2Config):
 
         @named_pjit(axis_resources=parameter_axis_mapping)
         def train_batch_loss(model, input_ids, attn_mask, key):
+            print("tbl input_ids", input_ids)
+            print("tbl key", key)
             return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=False))
 
         # training loop
