@@ -262,11 +262,8 @@ def main(config: TrainGpt2Config):
                     input_ids = next(iter_data)
                     input_ids = hax.named(input_ids, (Batch, SeqLen))
                     my_key, training_key = jrandom.split(training_key, 2)
-                    example_keys = global_key_array(
-                        my_key, config.trainer.train_batch_size, mesh, PartitionSpec(ResourceAxis.DATA)
-                    )
 
-                step_loss, model, opt_state = train_step(model, opt_state, input_ids, example_keys)
+                step_loss, model, opt_state = train_step(model, opt_state, input_ids, my_key)
                 step_loss = step_loss.item()
 
             with log_time_to_wandb("throughput/hook_time", step=step):
