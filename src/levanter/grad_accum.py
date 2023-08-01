@@ -96,7 +96,8 @@ def accumulate_gradients_sharded(
     # third, we want to do compute.
     def loop(acc, microbatch_key):
         loss, grad = acc
-        microbatch, m_key = microbatch_key
+        microbatch = (microbatch_key[0], microbatch_key[1])
+        m_key = microbatch_key[2]
         print("microbatch", microbatch)
         print('m_key', m_key)
         print("microbatch key", microbatch_key)
