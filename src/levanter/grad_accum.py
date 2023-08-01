@@ -134,5 +134,5 @@ def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inpu
 
     return jax.tree_util.tree_map(_reshape, inputs, is_leaf=is_named_array)
     '''
-    x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
-    return hax.shard_with_axis_mapping(x, axis_mapping)
+    inputs = inputs.unflatten_axis(Batch, (AccumStep, Microbatch))
+    return hax.shard_with_axis_mapping(inputs, axis_mapping)
