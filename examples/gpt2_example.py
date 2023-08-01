@@ -152,7 +152,6 @@ def main(config: TrainGpt2Config):
 
                 return loss.scalar()
 
-        @named_pjit(axis_resources=parameter_axis_mapping)
         def train_batch_loss(model, input_ids, attn_mask, key):
             print("tbl input_ids", input_ids)
             print("tbl key", key)
