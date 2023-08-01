@@ -102,7 +102,7 @@ def accumulate_gradients_sharded(
         print("microbatch key", microbatch_key)
         with jax.named_scope("grad"):
             if key is not None:
-                this_loss, this_grad = f(model, *microbatch, key=m_key)
+                this_loss, this_grad = f(model, *microbatch, m_key)
             else:
                 this_loss, this_grad = f(model, *microbatch)
             this_grad = hax.partitioning.shard_with_axis_mapping(this_grad, parameter_axis_mapping)
