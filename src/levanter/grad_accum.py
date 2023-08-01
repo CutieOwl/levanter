@@ -91,17 +91,20 @@ def accumulate_gradients_sharded(
     print("accum step", AccumStep)
     # second, we want to reshape our data to (num_micro_steps, micro_batch_size, ...), sharded along the data axis
     inputs = _reshape_for_microbatch(Batch, Microbatch, AccumStep, inputs, parameter_axis_mapping)
+    print('inputs shape', inputs.shape)
     print("inputs after reshape", inputs)
+    input_key = inputs[2]
+    inputs = inputs[:2]
 
     # third, we want to do compute.
-    def loop(acc, microbatch_key):
+    def loop(acc, microbatch):
         loss, grad = acc
         #microbatch, m_key = microbatch_key
         #print("microbatch", microbatch)
         #print('m_key', m_key)
         #print("microbatch key", microbatch_key)
         with jax.named_scope("grad"):
-            this_loss, this_grad = f(model, *microbatch_key)
+            this_loss, this_grad = f(model, *microbatch, input_key)
             this_grad = hax.partitioning.shard_with_axis_mapping(this_grad, parameter_axis_mapping)
 
         with jax.named_scope("accum"):
