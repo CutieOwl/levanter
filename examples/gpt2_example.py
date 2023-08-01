@@ -165,6 +165,8 @@ def main(config: TrainGpt2Config):
             attn_mask = hax.vmap(attention_mask, Batch)(False, keys)
             attn_mask = hax.auto_sharded(attn_mask)
 
+            print("train_step input_ids", input_ids)
+            print("keys", keys)
             loss, grads = accumulate_gradients_sharded(
                 eqx.filter_value_and_grad(train_batch_loss),
                 Batch,
@@ -264,6 +266,8 @@ def main(config: TrainGpt2Config):
                 with log_time_to_wandb("throughput/loading_time", step=step):
                     input_ids = next(iter_data)
                     input_ids = hax.named(input_ids, (Batch, SeqLen))
+                    print("training_key", training_key)
+                    print("input_ids step", input_ids)
                     my_key, training_key = jrandom.split(training_key, 2)
                     example_keys = global_key_array(
                         my_key, config.trainer.train_batch_size, mesh, PartitionSpec(ResourceAxis.DATA)
