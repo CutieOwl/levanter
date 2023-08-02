@@ -10,7 +10,7 @@ data:
 model:
   type: gpt2
   hidden_dim: 768
-  num_heads: 12
+  num_heads: 8
   num_layers: 12
   seq_len: 16384
   scale_attn_by_inverse_layer_idx: true
@@ -19,20 +19,20 @@ model:
   resid_pdrop: 0.1
 trainer:
   mp: p=f32,c=bfloat16
-  model_axis_size: 4
+  model_axis_size: 8
   per_device_parallelism: 1
   num_train_steps: 115000
   #load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/blooming-plasma-85/step-104050"
   train_batch_size: 32
-  tensor_parallel_axes: ["heads"]
-  #axis_resources:
-  #  batch: "data"
-  #  vocab: "model"
-  #  mlp: "model"
-  #  heads: "model"
+  #tensor_parallel_axes: ["mlp", "heads"]
+  axis_resources:
+    batch: "data"
+    vocab: "model"
+    mlp: "model"
+    heads: "model"
   # ZERO-3
-  #parameter_axis_resources:
-  #  embed: "data"
+  parameter_axis_resources:
+    embed: "data"
 
   checkpointer:
     base_path: gs://levanter-eu/lakh-checkpoints/
