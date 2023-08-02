@@ -181,14 +181,17 @@ class Gpt2Attention(StateDictSerializationMixin, eqx.Module):
             k = k.astype(jnp.float32)
 
         attn_scores = hax.dot("head_size", q, k)
+        print("attn scores", attn_scores)
 
         if mask is not None:
             attn_scores = attn_scores + (1.0 - mask) * -1e9
 
         attn_weights = hnn.softmax(attn_scores, axis="key_position").astype(x.dtype)
         attn_weights = self.dropout(attn_weights, key=key, inference=inference)
+        print("attn weights", attn_weights)
 
         attn_output = hax.dot("key_position", attn_weights, v)  # [heads, seq_len, head_dim]
+        print("attn output", attn_output)
 
         attn_output = self.c_proj(attn_output)
         return attn_output
