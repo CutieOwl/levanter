@@ -168,14 +168,17 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
             k = k.astype(jnp.float32)
 
         attn_scores = hax.dot(self.HeadDim, q, k)
+        print("attn_scores", attn_scores)
 
         if mask is not None:
             attn_scores = attn_scores + (1.0 - mask) * -1e9
 
         attn_weights = hnn.softmax(attn_scores, axis=self.KeySeqLen).astype(hidden_states.dtype)
         attn_weights = self.dropout(attn_weights, key=key, inference=inference)
+        print("attn_weights", attn_weights)
 
         attn_output = hax.dot(self.KeySeqLen, attn_weights, v)  # [heads, seq_len, head_dim]
+        print("attn_output", attn_output)
 
         attn_output = self.c_proj(attn_output)
         return attn_output
@@ -463,6 +466,8 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
         if not inference and key is None:
             raise ValueError("key must be provided for training")
 
+        print("input_ids in gpt2", input_ids)
+        print("key in gpt2", key)
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
         hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
         hidden_states = self.transformer(hidden_states, attn_mask, inference=inference, key=k_transformer)

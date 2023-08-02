@@ -132,6 +132,8 @@ def main(config: TrainGpt2Config):
 
         # loss function: this computes the loss with respect to a single example
         def compute_loss(model: Gpt2LMHeadModel, input_ids, attn_mask, key, inference):
+            print("compute_loss input_ids", input_ids)
+            print('compute_loss key', key)
             with hax.axis_mapping(compute_axis_mapping):
                 model = mp.cast_to_compute(model)
 
@@ -152,6 +154,8 @@ def main(config: TrainGpt2Config):
                 return loss.scalar()
 
         def compute_train_loss(model, input_ids, attn_mask, key=None):
+            print("compute_train_loss input_ids", input_ids)
+            print("compute_train_loss key", key)
             return compute_loss(model, input_ids, attn_mask, key, inference=True)
 
         # training loop
@@ -167,6 +171,8 @@ def main(config: TrainGpt2Config):
             attn_mask = hax.vmap(attention_mask, Batch)(False, mask_keys)
             attn_mask = hax.auto_sharded(attn_mask)
 
+            print("train_step input_ids", input_ids)
+            print("train_step key", key)
             loss, grads = accumulate_gradients_sharded(
                 eqx.filter_value_and_grad(compute_train_loss),
                 Batch,
@@ -267,6 +273,8 @@ def main(config: TrainGpt2Config):
                     input_ids = hax.named(input_ids, (Batch, SeqLen))
                     my_key, training_key = jrandom.split(training_key, 2)
 
+                print("input_ids", input_ids)
+                print("my_key", my_key)
                 step_loss, model, opt_state = train_step(model, opt_state, input_ids, my_key)
                 step_loss = step_loss.item()
 
