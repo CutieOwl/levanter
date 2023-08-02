@@ -24,6 +24,7 @@ trainer:
   num_train_steps: 115000
   #load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/blooming-plasma-85/step-104050"
   train_batch_size: 32
+  tensor_parallel_axes: ["heads"]
 
   checkpointer:
     base_path: gs://levanter-eu/lakh-checkpoints/
