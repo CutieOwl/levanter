@@ -157,7 +157,8 @@ def main(config: TrainGpt2Config):
         def train_batch_loss(model, input_ids, attn_mask, key):
             print("tbl input_ids", input_ids)
             print("tbl key", key)
-            return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=False))
+            return compute_loss(model, input_ids, attn_mask, key, inference=False)
+            #return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=False))
 
         # training loop
         # donate args to conserve memory
