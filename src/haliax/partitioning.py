@@ -12,6 +12,7 @@ from equinox.compile_utils import compile_cache, get_fun_names, hashable_combine
 from jax.experimental.global_device_array import GlobalDeviceArray
 from jax.experimental.pjit import FROM_GDA, pjit, with_sharding_constraint
 from jax.interpreters.pxla import PartitionSpec
+from jaxlib.xla_client import SingleDeviceSharding
 from jaxtyping import PyTree
 
 from .core import NamedArray
@@ -134,6 +135,9 @@ def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceM
         elif isinstance(node, GlobalDeviceArray):
             return FROM_GDA
         elif hasattr(node, "sharding"):
+            if isinstance(node.sharding, SingleDeviceSharding):
+                return None
+            
             return node.sharding
         else:
             return None
