@@ -140,7 +140,8 @@ def infer_resource_partitions(tree: PyTree, resource_mapping: Optional[ResourceM
             
             return node.sharding
         else:
-            return None
+            return PartitionSpec()
+            #return None
 
     return jax.tree_util.tree_map(partition_spec, tree, is_leaf=is_named_array)
 
