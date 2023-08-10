@@ -22,7 +22,7 @@ trainer:
   model_axis_size: 2
   per_device_parallelism: 1
   num_train_steps: 115000
-  #load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/blooming-plasma-85/step-104050"
+  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/colorful-silence/step-23000"
   train_batch_size: 32
 
   checkpointer:
