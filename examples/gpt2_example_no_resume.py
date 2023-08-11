@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from functools import partial
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ import haliax.random
 import wandb
 from haliax import Axis
 from haliax.partitioning import ResourceAxis, named_pjit, round_axis_for_partitioning
+from haliax.jax_utils import maybe_rng_split
 from levanter import callbacks
 from levanter.config import TrainerConfig
 from levanter.data.sharded import GlobalBatchDataset
@@ -131,6 +133,8 @@ def main(config: TrainGpt2Config):
 
         # loss function: this computes the loss with respect to a single example
         def compute_loss(model: Gpt2LMHeadModel, input_ids, attn_mask, key, inference):
+            print("compute_loss input_ids", input_ids)
+            print("compute_loss key", key)
             with hax.axis_mapping(compute_axis_mapping):
                 model = mp.cast_to_compute(model)
 
@@ -151,23 +155,33 @@ def main(config: TrainGpt2Config):
                 return loss.scalar()
 
         def train_batch_loss(model, input_ids, attn_mask, key):
-            return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=False))
+            print("tbl input_ids", input_ids)
+            print("tbl key", key)
+            return compute_loss(model, input_ids, attn_mask, key, inference=False)
+            #return hax.mean(hax.vmap(compute_loss, Batch)(model, input_ids, attn_mask, key, inference=False))
 
         # training loop
         # donate args to conserve memory
         @named_pjit(axis_resources=parameter_axis_mapping, donate_args=True)
-        def train_step(model, opt_state, input_ids, keys):
+        def train_step(model, opt_state, input_ids, key):
+            if key is not None:
+                mask_key, key = jrandom.split(key)
+                mask_keys = maybe_rng_split(mask_key, Batch.size)
+            else:
+                mask_keys = None
 
-            attn_mask = hax.vmap(attention_mask, Batch)(False, keys)
+            attn_mask = hax.vmap(attention_mask, Batch)(False, mask_keys)
             attn_mask = hax.auto_sharded(attn_mask)
 
+            print("train_step input_ids", input_ids)
+            print("keys", key)
             loss, grads = accumulate_gradients_sharded(
                 eqx.filter_value_and_grad(train_batch_loss),
                 Batch,
                 model,
                 input_ids,
                 attn_mask,
-                keys,
+                key=key,
                 per_device_parallelism=config.trainer.per_device_parallelism,
                 parameter_axis_mapping=parameter_axis_mapping,
             )
@@ -261,12 +275,11 @@ def main(config: TrainGpt2Config):
                 with log_time_to_wandb("throughput/loading_time", step=step):
                     input_ids = next(iter_data)
                     input_ids = hax.named(input_ids, (Batch, SeqLen))
+                    #print("training_key", training_key)
+                    #print("input_ids step", input_ids)
                     my_key, training_key = jrandom.split(training_key, 2)
-                    example_keys = global_key_array(
-                        my_key, config.trainer.train_batch_size, mesh, PartitionSpec(ResourceAxis.DATA)
-                    )
 
-                step_loss, model, opt_state = train_step(model, opt_state, input_ids, example_keys)
+                step_loss, model, opt_state = train_step(model, opt_state, input_ids, my_key)
                 step_loss = step_loss.item()
 
             with log_time_to_wandb("throughput/hook_time", step=step):
