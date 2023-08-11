@@ -8,6 +8,7 @@ data:
   plaintext: True
   enforce_eos: False
 model:
+  seed: 1
   hidden_dim: 768
   num_heads: 12
   num_layers: 12
