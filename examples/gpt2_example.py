@@ -266,8 +266,8 @@ def main(config: TrainGpt2Config):
                 with log_time_to_wandb("throughput/loading_time", step=step):
                     input_ids = next(iter_data)
                     input_ids = hax.named(input_ids, (Batch, SeqLen))
-                    print("training_key", training_key)
-                    print("input_ids step", input_ids)
+                    #print("training_key", training_key)
+                    #print("input_ids step", input_ids)
                     my_key, training_key = jrandom.split(training_key, 2)
                     example_keys = global_key_array(
                         my_key, config.trainer.train_batch_size, mesh, PartitionSpec(ResourceAxis.DATA)
