@@ -22,7 +22,7 @@ trainer:
   model_axis_size: 2
   per_device_parallelism: 1
   num_train_steps: 30000
-  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/young-resonance-84/step-100000"
+  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/rare-cherry-24/step-100000"
   train_batch_size: 16
 
   checkpointer:
