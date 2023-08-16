@@ -21,7 +21,7 @@ sharded_normal = hax.random.generate_sharded(hax.random.normal)
 
 @dataclass(frozen=True)
 class Gpt2Config:
-    seq_len: int = 512
+    seq_len: int = 1024
     hidden_dim: int = 768
     num_layers: int = 12
     num_heads: int = 12
@@ -105,11 +105,9 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
     c_proj: hnn.Linear  # output projection from [heads, head_dim] -> [embed]
     dropout: hnn.Dropout
 
-    SeqLen: Axis = eqx.static_field()
     HeadDim: Axis = eqx.static_field()
     Heads: Axis = eqx.static_field()
     Qkv: Axis = eqx.static_field()
-    KeySeqLen: Axis = eqx.static_field()
 
     # Mistral stability tweaks
     scale_by_inverse_layer_idx: bool = eqx.static_field()
@@ -117,8 +115,6 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
 
     def __init__(
         self,
-        SeqLen: Axis,
-        KeySeqLen: Axis,
         Embed: Axis,
         Heads: Axis,
         HeadDim: Axis,
@@ -131,9 +127,7 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
     ):
         self.Heads = Heads
         self.HeadDim = HeadDim
-        self.SeqLen = SeqLen
         self.Qkv = Axis("qkv", 3)
-        self.KeySeqLen = KeySeqLen
 
         k_c, k_proj = jrandom.split(key, 2)
         self.c_attn = hnn.Linear(In=Embed, Out=(self.Qkv, self.Heads, self.HeadDim), key=k_c, use_bias=use_bias)
@@ -145,14 +139,16 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
 
     @named_call
     def __call__(
-        self, hidden_states: NamedArray, mask: Optional[NamedArray], layer_idx, inference: bool = True, *, key
+        self, hidden_states: NamedArray, mask: Optional[NamedArray], layer_idx, inference: bool = True, *, key, SeqLen_axis: Axis
     ):
         qkv_out = self.c_attn(hidden_states)
         q, k, v = qkv_out.unbind(self.Qkv)
 
+        KeySeqLen_axis = SeqLen_axis.alias(f"key_{self.SeqLen.name}")
+
         # Rename k and v's SeqLen as haliax doesn't support unnamed axes or duplicate axes
-        k = k.rename({self.SeqLen: self.KeySeqLen})
-        v = v.rename({self.SeqLen: self.KeySeqLen})
+        k = k.rename({SeqLen_axis: KeySeqLen_axis})
+        v = v.rename({SeqLen_axis: KeySeqLen_axis})
 
         # mistral tweak: scale norms by 1/sqrt(layer_idx) to prevent blowup
         scale = jax.lax.rsqrt(float(self.HeadDim.size))
@@ -172,10 +168,10 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
         if mask is not None:
             attn_scores = attn_scores + (1.0 - mask) * -1e9
 
-        attn_weights = hnn.softmax(attn_scores, axis=self.KeySeqLen).astype(hidden_states.dtype)
+        attn_weights = hnn.softmax(attn_scores, axis=KeySeqLen_axis).astype(hidden_states.dtype)
         attn_weights = self.dropout(attn_weights, key=key, inference=inference)
 
-        attn_output = hax.dot(self.KeySeqLen, attn_weights, v)  # [heads, seq_len, head_dim]
+        attn_output = hax.dot(KeySeqLen_axis, attn_weights, v)  # [heads, seq_len, head_dim]
 
         attn_output = self.c_proj(attn_output)
         return attn_output
@@ -239,8 +235,6 @@ class Gpt2Block(TorchSerializationMixin, eqx.Module):
 
         self.ln_1 = hnn.LayerNorm(config.Embed, eps=config.layer_norm_epsilon)
         self.attn = Gpt2Attention(
-            SeqLen=config.SeqLen,
-            KeySeqLen=config.KeySeqLen,
             Embed=config.Embed,
             Heads=config.Heads,
             HeadDim=config.HeadDim,
@@ -262,11 +256,11 @@ class Gpt2Block(TorchSerializationMixin, eqx.Module):
         )
 
     @named_call
-    def __call__(self, hidden_states: NamedArray, mask: Optional[NamedArray], inference, layer_idx, *, key):
+    def __call__(self, hidden_states: NamedArray, mask: Optional[NamedArray], inference, layer_idx, *, key, SeqLen_axis: Axis):
         k1, k2, k3 = haliax.jax_utils.maybe_rng_split(key, 3)
 
         hidden_states = hax.auto_sharded(hidden_states)
-        attn_output = self.attn(self.ln_1(hidden_states), mask=mask, inference=inference, layer_idx=layer_idx, key=k1)
+        attn_output = self.attn(self.ln_1(hidden_states), mask=mask, inference=inference, layer_idx=layer_idx, key=k1, SeqLen_axis=SeqLen_axis)
         attn_output = self.resid_dropout(attn_output, key=k2, inference=inference)
         hidden_states = hidden_states + attn_output
 
@@ -295,16 +289,16 @@ class Gpt2Transformer(TorchSerializationMixin, eqx.Module):
         self.ln_f = hnn.LayerNorm(config.Embed, eps=config.layer_norm_epsilon)
 
     @named_call
-    def __call__(self, hidden_states: NamedArray, attn_mask: Optional[NamedArray], *, inference, key) -> NamedArray:
-        def do_block(hidden_states, block, layer_idx, key):
-            return block(hidden_states, attn_mask, inference=inference, layer_idx=layer_idx, key=key)
+    def __call__(self, hidden_states: NamedArray, attn_mask: Optional[NamedArray], *, inference, key, SeqLen_axis: Axis) -> NamedArray:
+        def do_block(hidden_states, block, layer_idx, key, SeqLen_axis: Axis):
+            return block(hidden_states, attn_mask, inference=inference, layer_idx=layer_idx, key=key, SeqLen_axis=SeqLen_axis)
 
         if self.config.gradient_checkpointing:
             do_block = jax.checkpoint(do_block, prevent_cse=False)
 
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
         hidden_states = hax.fold(do_block, self.Layers)(  # type: ignore
-            hidden_states, self.blocks, hax.arange(self.Layers), key=keys  # type: ignore
+            hidden_states, self.blocks, hax.arange(self.Layers), key=keys, SeqLen_axis=SeqLen_axis  # type: ignore
         )
         hidden_states = hax.auto_sharded(hidden_states)
         hidden_states = self.ln_f(hidden_states)
@@ -371,20 +365,17 @@ class Gpt2Transformer(TorchSerializationMixin, eqx.Module):
 
 class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
     token_embeddings: NamedArray
-    # position_embeddings: NamedArray
     token_out_embeddings: Optional[NamedArray]
     dropout: hnn.Dropout
 
     # axes
     Vocab: Axis = eqx.static_field()
-    SeqLen: Axis = eqx.static_field()
     Embed: Axis = eqx.static_field()
 
     def __init__(
         self,
         Embed: Axis,
         Vocab: Axis,
-        SeqLen: Axis,
         initializer_range: float,
         tie_word_embeddings: bool,
         dropout_prob: float,
@@ -395,11 +386,9 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
         k_wte, k_out = jrandom.split(key, 2) # k_wpe,
 
         self.Vocab = Vocab
-        self.SeqLen = SeqLen
         self.Embed = Embed
 
         self.token_embeddings = sharded_normal(key=k_wte, shape=(Vocab, Embed)) * initializer_range
-        # self.position_embeddings = sharded_normal(key=k_wpe, shape=(SeqLen, Embed)) * (initializer_range / 2)
         self.dropout = hnn.Dropout(pdrop=dropout_prob)
 
         if tie_word_embeddings:
@@ -410,7 +399,6 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
     @named_call
     def embed(self, input_ids, inference, *, key):
         input_embeds = self.token_embeddings.take(self.Vocab, input_ids)
-        #position_embeds = self.position_embeddings
 
         hidden_states = input_embeds #+ position_embeds
         hidden_states = self.dropout(hidden_states, inference=inference, key=key)
@@ -423,7 +411,7 @@ class Gpt2Embeddings(TorchSerializationMixin, eqx.Module):
 
     def _torch_key_map(self) -> Optional[Dict[str, Optional[str]]]:
         assert self.token_out_embeddings is None
-        return {"token_embeddings": "wte.weight"} # , "position_embeddings": "wpe.weight"}
+        return {"token_embeddings": "wte.weight"} 
 
 
 class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
@@ -442,31 +430,26 @@ class Gpt2LMHeadModel(TorchSerializationMixin, eqx.Module):
     def Vocab(self) -> Axis:
         return self.embeddings.Vocab
 
-    @property
-    def SeqLen(self) -> Axis:
-        return self.embeddings.SeqLen
-
     def __init__(self, Vocab: Axis, config: Gpt2Config, *, key):
         k_t, k_embeddings = jrandom.split(key, 2)
         self.transformer = Gpt2Transformer(config, key=k_t)
         self.embeddings = Gpt2Embeddings(
             Vocab=Vocab,
             Embed=config.Embed,
-            SeqLen=config.SeqLen,
             initializer_range=config.initializer_range,
             tie_word_embeddings=True,
             dropout_prob=config.embed_pdrop,
             key=k_embeddings,
         )
 
-    def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key):
+    def __call__(self, input_ids: NamedArray, attn_mask: Optional[NamedArray], *, inference, key, SeqLen_axis: Axis):
         if not inference and key is None:
             raise ValueError("key must be provided for training")
 
         print("key in gpt2", key)
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
         hidden_states = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
-        hidden_states = self.transformer(hidden_states, attn_mask, inference=inference, key=k_transformer)
+        hidden_states = self.transformer(hidden_states, attn_mask, inference=inference, key=k_transformer, SeqLen_axis=SeqLen_axis)
         lm_logits = self.embeddings.unembed(hidden_states)
 
         return lm_logits

@@ -239,14 +239,19 @@ class TrainerConfig:
 
     # config related to partitioning
     # TODO: in theory we can support tuples of physical axis names, but I don't think anyone actually uses that.
-    model_axis_size: int = 1  # how many devices to shard each model over. Data axis is the other axis
+    short_model_axis_size: int = 1  # how many devices to shard each model over. Data axis is the other axis
+    long_model_axis_size: int = 1  # how many devices to shard each model over. Data axis is the other axis
     axis_resources: Mapping[str, str] = field(default_factory=dict)  # mapping from logical axis to physical axis
     parameter_axis_resources: Mapping[str, str] = field(default_factory=dict)  # overrides axis_mapping for parameter
     # and optimizer sharding
 
     # Config related to batch sizes
-    train_batch_size: int = 512
-    per_device_parallelism: int = -1
+    short_train_batch_size: int = 512
+    long_train_batch_size: int = 32
+    short_seq_len: int = 1024
+    long_seq_len: int = 16384
+    short_per_device_parallelism: int = -1
+    long_per_device_parallelism: int = -1
 
     per_device_eval_parallelism: int = -1
 
@@ -293,10 +298,17 @@ class TrainerConfig:
         self._validate()
 
     @cached_property
-    def device_mesh(self) -> Mesh:
+    def short_device_mesh(self) -> Mesh:
         print("device mesh")
         devices = jax.devices()
-        devices = np.array(devices).reshape(self.data_axis_size, self.model_axis_size)
+        devices = np.array(devices).reshape(self.short_data_axis_size, self.short_model_axis_size)
+        return Mesh(devices, (ResourceAxis.DATA, ResourceAxis.MODEL))
+    
+    @cached_property
+    def long_device_mesh(self) -> Mesh:
+        print("device mesh")
+        devices = jax.devices()
+        devices = np.array(devices).reshape(self.long_data_axis_size, self.long_model_axis_size)
         return Mesh(devices, (ResourceAxis.DATA, ResourceAxis.MODEL))
 
     @property
@@ -304,12 +316,20 @@ class TrainerConfig:
         return self.per_device_eval_parallelism * self.data_axis_size
 
     @property
-    def data_axis_size(self):
+    def short_data_axis_size(self):
         """size of the data parallel/batch parallel axis."""
-        print("data axis size")
+        print("short data axis size")
 
-        assert jax.device_count() % self.model_axis_size == 0
-        return jax.device_count() // self.model_axis_size
+        assert jax.device_count() % self.short_model_axis_size == 0
+        return jax.device_count() // self.short_model_axis_size
+    
+    @property
+    def long_data_axis_size(self):
+        """size of the data parallel/batch parallel axis."""
+        print("long data axis size")
+
+        assert jax.device_count() % self.long_model_axis_size == 0
+        return jax.device_count() // self.long_model_axis_size
 
     @property
     def compute_axis_mapping(self) -> ResourceMapping:
@@ -381,29 +401,49 @@ class TrainerConfig:
 
     # we can't do this in post_init because we don't want to call jax.device_count before calling distributed.initialize
     def _validate(self):
-        if jax.device_count() % self.model_axis_size != 0:
+        if jax.device_count() % self.short_model_axis_size != 0:
             raise ValueError(
-                f"num_devices ({jax.device_count()}) is not divisible by model_axis_size ({self.model_axis_size})"
+                f"num_devices ({jax.device_count()}) is not divisible by short_model_axis_size ({self.short_model_axis_size})"
+            )
+        if jax.device_count() % self.long_model_axis_size != 0:
+            raise ValueError(
+                f"num_devices ({jax.device_count()}) is not divisible by long_model_axis_size ({self.long_model_axis_size})"
             )
 
         if (
-            jax.local_device_count() % self.model_axis_size != 0
-            and self.model_axis_size % jax.local_device_count() != 0
+            jax.local_device_count() % self.short_model_axis_size != 0
+            and self.short_model_axis_size % jax.local_device_count() != 0
         ):
-            raise ValueError("either model_axis_size or local_device_count must be divisible by the other")
+            raise ValueError("either short_model_axis_size or local_device_count must be divisible by the other")
+        
+        if (
+            jax.local_device_count() % self.long_model_axis_size != 0
+            and self.long_model_axis_size % jax.local_device_count() != 0
+        ):
+            raise ValueError("either long_model_axis_size or local_device_count must be divisible by the other")
 
-        if self.per_device_parallelism == -1:
-            self.per_device_parallelism = self.train_batch_size // jax.device_count()
+        if self.short_per_device_parallelism == -1:
+            self.short_per_device_parallelism = self.short_train_batch_size // jax.device_count()
+
+        if self.long_per_device_parallelism == -1:
+            self.long_per_device_parallelism = self.long_train_batch_size // jax.device_count()
+
 
         # validate size of per_device_parallelism
-        if self.train_batch_size % (self.per_device_parallelism * self.data_axis_size) != 0:
+        if self.short_train_batch_size % (self.short_per_device_parallelism * self.short_data_axis_size) != 0:
             raise ValueError(
-                f"train_batch_size ({self.train_batch_size}) must be divisible by per_device_parallelism *"
-                f" data_axis_size ({self.per_device_parallelism}, {self.data_axis_size})"
+                f"short_train_batch_size ({self.short_train_batch_size}) must be divisible by short_per_device_parallelism *"
+                f" short_data_axis_size ({self.short_per_device_parallelism}, {self.short_data_axis_size})"
+            )
+        
+        if self.long_train_batch_size % (self.long_per_device_parallelism * self.long_data_axis_size) != 0:
+            raise ValueError(
+                f"long_train_batch_size ({self.long_train_batch_size}) must be divisible by long_per_device_parallelism *"
+                f" long_data_axis_size ({self.long_per_device_parallelism}, {self.long_data_axis_size})"
             )
 
         if self.per_device_eval_parallelism == -1:
-            self.per_device_eval_parallelism = self.per_device_parallelism
+            self.per_device_eval_parallelism = self.short_per_device_parallelism
 
 
 def register_codecs():

@@ -1,4 +1,13 @@
-data:
+data_short:
+  train_urls:
+      - "gs://levanter-eu/lakh-data-inter-1024/train.txt"
+  validation_urls:
+      - "gs://levanter-eu/lakh-data-inter-1024/valid.txt"
+  cache_dir: "gs://levanter-eu/lakh-data-inter-1024/cache/"
+  tokenizer: "passthrough"
+  plaintext: True
+  enforce_eos: False
+data_long:
   train_urls:
       - "gs://levanter-eu/lakh-data-inter-16384/train.txt"
   validation_urls:
@@ -11,7 +20,6 @@ model:
   hidden_dim: 768
   num_heads: 12
   num_layers: 12
-  seq_len: 16384
   scale_attn_by_inverse_layer_idx: true
   embed_pdrop: 0.1
   resid_pdrop: 0.1
@@ -19,11 +27,16 @@ trainer:
   mp: p=f32,c=bfloat16
   learning_rate: 6E-4
   weight_decay: 0.1
-  model_axis_size: 2
-  per_device_parallelism: 1
-  num_train_steps: 115000
+  short_model_axis_size: 1
+  long_model_axis_size: 2
+  short_per_device_parallelism: 16
+  long_per_device_parallelism: 1
+  short_train_batch_size: 512
+  long_train_batch_size: 32
+  short_seq_len: 1024
+  long_seq_len: 16384
   #load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/blooming-plasma-85/step-104050"
-  train_batch_size: 32
+   num_train_steps: 115000
 
   checkpointer:
     base_path: gs://levanter-eu/lakh-checkpoints/
