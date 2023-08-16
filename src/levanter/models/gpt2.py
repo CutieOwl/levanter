@@ -290,7 +290,7 @@ class Gpt2Transformer(TorchSerializationMixin, eqx.Module):
 
     @named_call
     def __call__(self, hidden_states: NamedArray, attn_mask: Optional[NamedArray], *, inference, key, SeqLen_axis: Axis) -> NamedArray:
-        def do_block(hidden_states, block, layer_idx, key, SeqLen_axis: Axis):
+        def do_block(hidden_states, block, layer_idx, key):
             return block(hidden_states, attn_mask, inference=inference, layer_idx=layer_idx, key=key, SeqLen_axis=SeqLen_axis)
 
         if self.config.gradient_checkpointing:
@@ -298,7 +298,7 @@ class Gpt2Transformer(TorchSerializationMixin, eqx.Module):
 
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
         hidden_states = hax.fold(do_block, self.Layers)(  # type: ignore
-            hidden_states, self.blocks, hax.arange(self.Layers), key=keys, SeqLen_axis=SeqLen_axis  # type: ignore
+            hidden_states, self.blocks, hax.arange(self.Layers), key=keys  # type: ignore
         )
         hidden_states = hax.auto_sharded(hidden_states)
         hidden_states = self.ln_f(hidden_states)
