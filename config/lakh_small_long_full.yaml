@@ -22,7 +22,7 @@ trainer:
   model_axis_size: 2
   per_device_parallelism: 1
   num_train_steps: 115000
-  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/lucky-meadow-167/step-89099"
+  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/celestial-cloud-175/step-96064"
   train_batch_size: 32
 
   checkpointer:
