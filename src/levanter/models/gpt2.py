@@ -144,7 +144,7 @@ class Gpt2Attention(TorchSerializationMixin, eqx.Module):
         qkv_out = self.c_attn(hidden_states)
         q, k, v = qkv_out.unbind(self.Qkv)
 
-        KeySeqLen_axis = SeqLen_axis.alias(f"key_{self.SeqLen.name}")
+        KeySeqLen_axis = SeqLen_axis.alias(f"key_{SeqLen_axis.name}")
 
         # Rename k and v's SeqLen as haliax doesn't support unnamed axes or duplicate axes
         k = k.rename({SeqLen_axis: KeySeqLen_axis})
