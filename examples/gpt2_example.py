@@ -51,7 +51,7 @@ def main(config: TrainGpt2Config):
     config.trainer.initialize(config)
     print("qq")
 
-    tokenizer: GPT2Tokenizer = config.data.the_tokenizer
+    tokenizer: GPT2Tokenizer = config.data_short.the_tokenizer
 
     # some axes we need
     short_Batch = Axis("batch", config.trainer.short_train_batch_size)
