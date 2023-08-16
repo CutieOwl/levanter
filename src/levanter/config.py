@@ -313,7 +313,7 @@ class TrainerConfig:
 
     @property
     def eval_batch_size(self):
-        return self.per_device_eval_parallelism * self.data_axis_size
+        return self.per_device_eval_parallelism * self.short_data_axis_size
 
     @property
     def short_data_axis_size(self):
