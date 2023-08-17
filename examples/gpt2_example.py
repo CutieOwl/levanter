@@ -324,7 +324,7 @@ def main(config: TrainGpt2Config):
                         example_keys = global_key_array(
                             my_key, config.trainer.long_train_batch_size, long_mesh, PartitionSpec(None) #PartitionSpec(ResourceAxis.DATA)
                         )
-                        print("long example_keys", example_keys)
+                        #print("long example_keys", example_keys)
                     step_loss, model, opt_state = long_train_step(model, opt_state, input_ids, example_keys)
                     step_loss = step_loss.item()
                 else:
@@ -337,7 +337,7 @@ def main(config: TrainGpt2Config):
                         example_keys = global_key_array(
                             my_key, config.trainer.short_train_batch_size, short_mesh, PartitionSpec(None) #PartitionSpec(ResourceAxis.DATA)
                         )
-                        print("short example_keys", example_keys)
+                        #print("short example_keys", example_keys)
                     step_loss, model, opt_state = short_train_step(model, opt_state, input_ids, example_keys)
                     step_loss = step_loss.item()
 
