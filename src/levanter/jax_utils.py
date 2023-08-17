@@ -90,6 +90,7 @@ def global_key_array(key: PRNGKey, global_shape, mesh, mesh_axes):
     global_shape = ensure_tuple(global_shape)
     orig_global_shape = global_shape
     global_shape = global_shape + key.shape
+    print("global_shape", global_shape)
     mesh_axes = list(mesh_axes) + [None] * (len(global_shape) - len(mesh_axes))
     mesh_axes = PartitionSpec(*mesh_axes)
 

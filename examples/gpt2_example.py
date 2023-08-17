@@ -146,8 +146,8 @@ def main(config: TrainGpt2Config):
 
         # loss function: this computes the loss with respect to a single example
         def compute_loss(model: Gpt2LMHeadModel, input_ids, attn_mask, key, inference, SeqLen_axis, loss_mask):
-            #print("compute_loss input_ids", input_ids)
-            #print("compute_loss key", key)
+            print("compute_loss input_ids", input_ids)
+            print("compute_loss key", key)
             with hax.axis_mapping(compute_axis_mapping):
                 model = mp.cast_to_compute(model)
 
@@ -168,37 +168,32 @@ def main(config: TrainGpt2Config):
                 return loss.scalar()
 
         def short_train_batch_loss(model, input_ids, attn_mask, key):
-            #print("tbl input_ids", input_ids)
-            #print("tbl key", key)
-            return compute_loss(model, input_ids, attn_mask, key, inference=False, SeqLen_axis=short_SeqLen, loss_mask=short_loss_mask)
+            print("tbl input_ids", input_ids)
+            print("tbl key", key)
+            return hax.mean(hax.vmap(compute_loss, short_Batch)(model, input_ids, attn_mask, key, inference=False, SeqLen_axis=short_SeqLen, loss_mask=short_loss_mask))
         
         def long_train_batch_loss(model, input_ids, attn_mask, key):
-            #print("tbl input_ids", input_ids)
-            #print("tbl key", key)
-            return compute_loss(model, input_ids, attn_mask, key, inference=False, SeqLen_axis=long_SeqLen, loss_mask=long_loss_mask)
+            print("tbl input_ids", input_ids)
+            print("tbl key", key)
+            return hax.mean(hax.vmap(compute_loss, long_Batch)(model, input_ids, attn_mask, key, inference=False, SeqLen_axis=long_SeqLen, loss_mask=long_loss_mask))
 
         # training loop
         # donate args to conserve memory
         @named_pjit(axis_resources=parameter_axis_mapping, donate_args=True)
-        def short_train_step(model, opt_state, input_ids, key):
-            if key is not None:
-                mask_key, key = jrandom.split(key)
-                mask_keys = maybe_rng_split(mask_key, short_Batch.size)
-            else:
-                mask_keys = None
+        def short_train_step(model, opt_state, input_ids, keys):
 
-            attn_mask = hax.vmap(attention_mask, short_Batch)(False, mask_keys, short_SeqLen, short_KeySeqLen)
+            attn_mask = hax.vmap(attention_mask, short_Batch)(False, keys, short_SeqLen, short_KeySeqLen)
             attn_mask = hax.auto_sharded(attn_mask)
 
-            #print("train_step input_ids", input_ids)
-            #print("keys", key)
+            print("train_step input_ids", input_ids)
+            print("keys", keys)
             loss, grads = accumulate_gradients_sharded(
                 eqx.filter_value_and_grad(short_train_batch_loss),
                 short_Batch,
                 model,
                 input_ids,
                 attn_mask,
-                key=key,
+                keys,
                 per_device_parallelism=config.trainer.short_per_device_parallelism,
                 parameter_axis_mapping=parameter_axis_mapping,
             )
@@ -210,25 +205,20 @@ def main(config: TrainGpt2Config):
             return loss, model, opt_state
         
         @named_pjit(axis_resources=parameter_axis_mapping, donate_args=True)
-        def long_train_step(model, opt_state, input_ids, key):
-            if key is not None:
-                mask_key, key = jrandom.split(key)
-                mask_keys = maybe_rng_split(mask_key, long_Batch.size)
-            else:
-                mask_keys = None
+        def long_train_step(model, opt_state, input_ids, keys):
 
-            attn_mask = hax.vmap(attention_mask, long_Batch)(False, mask_keys, long_SeqLen, long_KeySeqLen)
+            attn_mask = hax.vmap(attention_mask, long_Batch)(False, keys, long_SeqLen, long_KeySeqLen)
             attn_mask = hax.auto_sharded(attn_mask)
 
-            # print("train_step input_ids", input_ids)
-            # print("keys", key)
+            print("train_step input_ids", input_ids)
+            print("keys", keys)
             loss, grads = accumulate_gradients_sharded(
                 eqx.filter_value_and_grad(long_train_batch_loss),
                 long_Batch,
                 model,
                 input_ids,
                 attn_mask,
-                key=key,
+                keys,
                 per_device_parallelism=config.trainer.long_per_device_parallelism,
                 parameter_axis_mapping=parameter_axis_mapping,
             )
@@ -331,7 +321,11 @@ def main(config: TrainGpt2Config):
                         #print("training_key", training_key)
                         #print("input_ids step", input_ids)
                         my_key, training_key = jrandom.split(training_key, 2)
-                    step_loss, model, opt_state = long_train_step(model, opt_state, input_ids, my_key)
+                        example_keys = global_key_array(
+                            my_key, config.trainer.long_train_batch_size, long_mesh, PartitionSpec(ResourceAxis.DATA)
+                        )
+                        print("long example_keys", example_keys)
+                    step_loss, model, opt_state = long_train_step(model, opt_state, input_ids, example_keys)
                     step_loss = step_loss.item()
                 else:
                     with log_time_to_wandb("throughput/loading_time", step=step):
@@ -340,7 +334,11 @@ def main(config: TrainGpt2Config):
                         #print("training_key", training_key)
                         #print("input_ids step", input_ids)
                         my_key, training_key = jrandom.split(training_key, 2)
-                    step_loss, model, opt_state = short_train_step(model, opt_state, input_ids, my_key)
+                        example_keys = global_key_array(
+                            my_key, config.trainer.short_train_batch_size, short_mesh, PartitionSpec(ResourceAxis.DATA)
+                        )
+                        print("short example_keys", example_keys)
+                    step_loss, model, opt_state = short_train_step(model, opt_state, input_ids, example_keys)
                     step_loss = step_loss.item()
 
             with log_time_to_wandb("throughput/hook_time", step=step):
