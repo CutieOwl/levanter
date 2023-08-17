@@ -180,7 +180,7 @@ def main(config: TrainGpt2Config):
         # training loop
         # donate args to conserve memory
         @named_pjit(axis_resources=parameter_axis_mapping, donate_args=True)
-        def short_train_step(model, opt_state, input_ids, keys):
+        def short_train_step(model, opt_state, input_ids, key):
             if key is not None:
                 mask_key, key = jrandom.split(key)
                 mask_keys = maybe_rng_split(mask_key, short_Batch.size)
@@ -210,7 +210,7 @@ def main(config: TrainGpt2Config):
             return loss, model, opt_state
         
         @named_pjit(axis_resources=parameter_axis_mapping, donate_args=True)
-        def long_train_step(model, opt_state, input_ids, keys):
+        def long_train_step(model, opt_state, input_ids, key):
             if key is not None:
                 mask_key, key = jrandom.split(key)
                 mask_keys = maybe_rng_split(mask_key, long_Batch.size)
