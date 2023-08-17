@@ -220,8 +220,8 @@ def main(config: TrainGpt2Config):
             attn_mask = hax.vmap(attention_mask, long_Batch)(False, mask_keys, long_SeqLen, long_KeySeqLen)
             attn_mask = hax.auto_sharded(attn_mask)
 
-            print("train_step input_ids", input_ids)
-            print("keys", key)
+            # print("train_step input_ids", input_ids)
+            # print("keys", key)
             loss, grads = accumulate_gradients_sharded(
                 eqx.filter_value_and_grad(long_train_batch_loss),
                 long_Batch,
