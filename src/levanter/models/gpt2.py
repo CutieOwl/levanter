@@ -336,25 +336,25 @@ class Gpt2Embeddings(StateDictSerializationMixin, eqx.Module):
     config: Gpt2Config = eqx.static_field()
 
     token_embeddings: NamedArray
-    position_embeddings: NamedArray
+    #position_embeddings: NamedArray
     dropout: hnn.Dropout
 
     @staticmethod
     def init(Vocab: Axis, config: Gpt2Config, *, key) -> "Gpt2Embeddings":
-        k_wte, k_wpe, k_out = jrandom.split(key, 3)
+        k_wte, k_out = jrandom.split(key, 2) # k_wpe,
 
         token_embeddings = hax.random.normal(k_wte, (Vocab, config.Embed)) * config.initializer_range
-        position_embeddings = hax.random.normal(k_wpe, (config.Pos, config.Embed)) * (config.initializer_range / 2)
+        #position_embeddings = hax.random.normal(k_wpe, (config.Pos, config.Embed)) * (config.initializer_range / 2)
         dropout = hnn.Dropout(pdrop=config.embed_pdrop)
 
-        return Gpt2Embeddings(Vocab, config, token_embeddings, position_embeddings, dropout)
+        return Gpt2Embeddings(Vocab, config, token_embeddings, dropout) #, position_embeddings
 
     @named_call
     def embed(self, input_ids, inference, *, key):
         input_embeds = self.token_embeddings.take("vocab", input_ids)
-        position_embeds = self.position_embeddings
+        #position_embeds = self.position_embeddings
 
-        x = input_embeds + position_embeds
+        x = input_embeds #+ position_embeds
         x = self.dropout(x, inference=inference, key=key)
 
         return x
@@ -363,7 +363,7 @@ class Gpt2Embeddings(StateDictSerializationMixin, eqx.Module):
         return hax.dot("embed", x, self.token_embeddings)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
-        return {"token_embeddings": "wte.weight", "position_embeddings": "wpe.weight"}
+        return {"token_embeddings": "wte.weight"} #, "position_embeddings": "wpe.weight"}
 
     def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
         new_weights = hax.tree_util.resize_axis(self.token_embeddings, self.Vocab, new_size, key=key)
