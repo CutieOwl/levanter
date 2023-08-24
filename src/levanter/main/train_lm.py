@@ -54,7 +54,7 @@ class TrainLmConfig:
 
 
 def main(config: TrainLmConfig):
-    tokenizer = config.data.the_tokenizer
+    tokenizer = config.data[0].the_tokenizer
 
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
     # I recommend skipping it for now
