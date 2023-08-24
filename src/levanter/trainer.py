@@ -91,13 +91,13 @@ class TrainerConfig:
     """mapping from logical axis to physical axis. batch_axis, fsdp_axis, and tensor_parallel_axes are preferred"""
     parameter_axis_resources: Mapping[str, str] = field(default_factory=dict)  # overrides axis_mapping for parameter
     """logical->physical mapping for parameter/optimizer sharding. fsdp_axis and tensor_parallel_axes are preferred"""
-    model_axis_size: List[int] = [1]  # how many devices to shard each model over. Data axis is the other axis
+    model_axis_size: List[int] = field(default_factory=list)  # how many devices to shard each model over. Data axis is the other axis
 
     # Config related to batch sizes
-    train_batch_size: List[int] = [512]
-    step_curriculum: List[int] = [1]
+    train_batch_size: List[int] = field(default_factory=list)
+    step_curriculum: List[int] = field(default_factory=list)
     eval_idx: int = 0
-    per_device_parallelism: List[int] = [-1]
+    per_device_parallelism: List[int] = field(default_factory=list)
     """how many examples to process in parallel on each device. -1 (default) means train_batch_size/num_devices"""
 
     per_device_eval_parallelism: int = -1
@@ -146,6 +146,18 @@ class TrainerConfig:
 
     def initialize(self, all_config):
         """Initializes jax, wandb, logging, setting the run name in the process"""
+        num_components = 1 
+        if train_batch_size is None or len(train_batch_size) == 0:
+            train_batch_size = [512] * num_components
+        else:
+            num_components = len(train_batch_size)
+        if step_curriculum is None or len(step_curriculum) == 0:
+            step_curriculum = [1] * num_components
+        if model_axis_size is None or len(model_axis_size) == 0:
+            model_axis_size = [1] * num_components
+        if per_device_parallelism is None or len(per_device_parallelism) == 0:
+            per_device_parallelism = [-1] * num_components
+            
         self.distributed.initialize()
         self.ray.initialize()
         self._initialize_jax_config()
