@@ -11,6 +11,7 @@ from jax._src.random import PRNGKey
 from jaxtyping import PRNGKeyArray
 from transformers import GPT2Config as HfGpt2Config
 from transformers import PretrainedConfig as HfConfig
+from draccus import field
 
 import haliax as hax
 import haliax.jax_utils
@@ -38,7 +39,7 @@ from levanter.utils.py_utils import cached_classproperty
 @LmConfig.register_subclass("gpt2")
 @dataclass(frozen=True)
 class Gpt2Config(HFCompatConfig):
-    seq_len: List[int] = [512]
+    seq_len: List[int] = field(default_factory=lambda: [512])
     hidden_dim: int = 768
     num_layers: int = 12
     num_heads: int = 12
