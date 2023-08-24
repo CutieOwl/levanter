@@ -107,7 +107,7 @@ def main(config: TrainLmConfig):
     step_curriculum = config.trainer.step_curriculum
 
     eval_loader = ReplicatedBatchLoader(
-        CausalLmDataset(config.data[eval_idx].token_seq_dataset("validation", Pos_axes[eval_idx].size), Pos[eval_idx], KeyPos[eval_idx]),
+        CausalLmDataset(config.data[eval_idx].token_seq_dataset("validation", Pos_axes[eval_idx].size), Pos_axes[eval_idx], KeyPos_axes[eval_idx]),
         config.trainer.device_mesh(eval_idx),
         EvalBatch,
         compute_axis_mapping,
