@@ -167,7 +167,7 @@ class TrainerConfig:
             atexit.register(cloud_utils.shutdown_tpu_vm, self.shutdown_at_exit)
 
     #@cached_property
-    def device_mesh(self, index) -> Mesh:
+    def device_mesh(self, index=0) -> Mesh:
         devices = jax.devices()
         devices = np.array(devices).reshape(self.data_axis_size[index], self.model_axis_size[index])
         return Mesh(devices, (ResourceAxis.DATA, ResourceAxis.MODEL))

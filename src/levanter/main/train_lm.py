@@ -124,199 +124,200 @@ def main(config: TrainLmConfig):
             compute_axis_mapping,
         ))
 
-    # to do partitioning, our dimensions have to be divisible by the size of the physical axes they're mapped to
-    # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
-    # tokens: gpt-2 has 50257, for example. So we round up.
-    vocab_size = len(tokenizer)
-    Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
-    if vocab_size != Vocab.size:
-        logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
+    with config.trainer.device_mesh(0) as mesh:
+        # to do partitioning, our dimensions have to be divisible by the size of the physical axes they're mapped to
+        # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
+        # tokens: gpt-2 has 50257, for example. So we round up.
+        vocab_size = len(tokenizer)
+        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
+        if vocab_size != Vocab.size:
+            logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
-    # Mixed Precision. See our tutorial at https://colab.research.google.com/drive/1_4cikwt-UhSH7yRzNRK8ze9msM9r2mEl
-    mp: jmp.Policy = config.trainer.mp
+        # Mixed Precision. See our tutorial at https://colab.research.google.com/drive/1_4cikwt-UhSH7yRzNRK8ze9msM9r2mEl
+        mp: jmp.Policy = config.trainer.mp
 
-    def compute_loss(model: LmHeadModel, example: LmExample, inference, key=None, index=0):
-        with hax.axis_mapping(compute_axis_mapping):
-            model = mp.cast_to_compute(model)
-            return model.compute_loss(example, inference=inference, key=key, index=index).scalar()
+        def compute_loss(model: LmHeadModel, example: LmExample, inference, key=None, index=0):
+            with hax.axis_mapping(compute_axis_mapping):
+                model = mp.cast_to_compute(model)
+                return model.compute_loss(example, inference=inference, key=key, index=index).scalar()
 
-    # eval loss needs to specify the parameter sharding
-    eval_loss = functools.partial(
-        named_jit(compute_loss, in_axis_resources=parameter_axis_mapping), inference=True, index=eval_idx
-    )
-
-    # We use Optax for our optimizer. It's a pretty standard library for optimizers in JAX.
-    optimizer = config.optimizer.build(config.trainer.num_train_steps)
-
-    # initialize the model
-    # There are a few ways we might initialize the model
-    # * from a checkpoint during training
-    # * from scratch
-    # * from an hf pretrained model
-    def init_model_and_opt_state(model_key):
-        # This function
-        # 1) initializes model weights and opt_state
-        # 2) ensures all model weights are the right dtype
-        #model = config.model.build(Vocab, key=model_key)
-        model = Gpt2LMHeadModel.init(Vocab, config.model, key=model_key)
-        model = mp.cast_to_param(model)
-        opt_state = optimizer.init(model)
-        return model, opt_state
-
-    # first get the shape of the model and optimizer state
-    model, opt_state = eqx.filter_eval_shape(init_model_and_opt_state, model_key)
-    wandb.summary["parameter_count"] = parameter_count(model)
-
-    curr_dataloader = 0
-    curr_data_idx = 0
-
-    # second, try to load the model and opt state from a checkpoint. This may throw if we required a
-    # checkpoint but it wasn't found.
-    model, (opt_state, training_key), resume_step = config.trainer.maybe_load_checkpoint(
-        model,
-        (opt_state, training_key),
-        axis_mapping=parameter_axis_mapping,
-        mesh=config.trainer.device_mesh(curr_dataloader),
-    )
-
-    if resume_step is None:
-        # no checkpoint was found, so we need to initialize the model and opt state
-        if config.initialize_from_hf:
-            # initialize from an hf pretrained model
-            logger.info(
-                "No training checkpoint found. Initializing model from HF checkpoint"
-                f" '{converter.reference_checkpoint}'"
-            )
-            model = converter.load_pretrained(config.model, axis_mapping=parameter_axis_mapping)
-            model = named_jit(mp.cast_to_param, parameter_axis_mapping)(model)
-
-            opt_state = named_jit(optimizer.init, axis_resources=parameter_axis_mapping)(model)
-        else:
-            logger.info("No checkpoint found. Starting from scratch.")
-            model, opt_state = named_jit(init_model_and_opt_state, axis_resources=parameter_axis_mapping)(
-                model_key
-            )
-
-    # boilerplate hooks and such
-    engine = TrainerHooks()
-    engine.add_hook(callbacks.pbar_logger(total=config.trainer.num_train_steps), every=1)
-    engine.add_hook(callbacks.log_to_wandb, every=1)
-    #engine.add_hook(callbacks.log_performance_stats(Pos.size, config.trainer.train_batch_size), every=1)
-    if config.trainer.max_eval_batches is None or config.trainer.max_eval_batches > 0:
-        engine.add_hook(
-            callbacks.compute_validation_loss(eval_loss, eval_loader, max_batches=config.trainer.max_eval_batches),
-            every=config.trainer.steps_per_eval,
-        )
-    engine.add_hook(callbacks.wandb_xla_logger(config.trainer.wandb), every=config.trainer.steps_per_eval)
-    # engine.add_hook(callbacks.log_memory_usage(), every=1)
-    checkpointer = config.trainer.checkpointer.create(config.trainer.run_id)
-    engine.add_hook(checkpointer.on_step, every=1)  # checkpointer manages its own frequency
-    if config.hf_save_path is not None:
-        full_save_path = os.path.join(config.hf_save_path, config.trainer.run_id)
-        from levanter.compat.hf_checkpoints import save_hf_checkpoint_callback
-
-        engine.add_hook(
-            save_hf_checkpoint_callback(full_save_path, converter),
-            every=config.hf_save_steps,
+        # eval loss needs to specify the parameter sharding
+        eval_loss = functools.partial(
+            named_jit(compute_loss, in_axis_resources=parameter_axis_mapping), inference=True, index=eval_idx
         )
 
-    # visualize log probs
-    @named_jit(
-        in_axis_resources=parameter_axis_mapping,
-        axis_resources=compute_axis_mapping,
-        out_axis_resources=compute_axis_mapping,
-    )
-    def compute_log_probs(model, example: LmExample, index=0):
-        model = mp.cast_to_compute(model)
-        logprobs = model.compute_loss(example, inference=True, key=None, reduction=None, index=index)
-        # roll forward to get the loss for each predicted token
-        logprobs = hax.roll(logprobs, 1, Pos_axes[index])
-        return logprobs.rearrange((EvalBatch, Pos_axes[index])).array
+        # We use Optax for our optimizer. It's a pretty standard library for optimizers in JAX.
+        optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    # engine.add_hook(
-    #     callbacks.compute_and_visualize_log_probs(
-    #         eval_loader, tokenizer, compute_log_probs, os.path.join(config.trainer.run_dir, "log_probs")
-    #     ),
-    #     every=config.trainer.steps_per_eval,
-    # )
-    #
-    # train step
-    @named_jit(axis_resources=parameter_axis_mapping, donate_args=True)
-    def train_step(model, opt_state, examples: LmExample, key, index=0):
-        grad_loss = eqx.filter_value_and_grad(compute_loss)
+        # initialize the model
+        # There are a few ways we might initialize the model
+        # * from a checkpoint during training
+        # * from scratch
+        # * from an hf pretrained model
+        def init_model_and_opt_state(model_key):
+            # This function
+            # 1) initializes model weights and opt_state
+            # 2) ensures all model weights are the right dtype
+            #model = config.model.build(Vocab, key=model_key)
+            model = Gpt2LMHeadModel.init(Vocab, config.model, key=model_key)
+            model = mp.cast_to_param(model)
+            opt_state = optimizer.init(model)
+            return model, opt_state
 
-        loss, grads = accumulate_gradients_sharded(
-            grad_loss,
-            Batch_axes[index],
+        # first get the shape of the model and optimizer state
+        model, opt_state = eqx.filter_eval_shape(init_model_and_opt_state, model_key)
+        wandb.summary["parameter_count"] = parameter_count(model)
+
+        curr_dataloader = 0
+        curr_data_idx = 0
+
+        # second, try to load the model and opt state from a checkpoint. This may throw if we required a
+        # checkpoint but it wasn't found.
+        model, (opt_state, training_key), resume_step = config.trainer.maybe_load_checkpoint(
             model,
-            examples,
-            inference=False,
-            key=key,
-            index=index,
-            per_device_parallelism=config.trainer.per_device_parallelism[index],
-            parameter_axis_mapping=parameter_axis_mapping,
+            (opt_state, training_key),
+            axis_mapping=parameter_axis_mapping,
+            mesh=config.trainer.device_mesh(curr_dataloader),
         )
 
-        # distribute gradients across the mesh and apply them
-        updates, opt_state = optimizer.update(grads, opt_state, params=model)
-        model = eqx.apply_updates(model, updates)
+        if resume_step is None:
+            # no checkpoint was found, so we need to initialize the model and opt state
+            if config.initialize_from_hf:
+                # initialize from an hf pretrained model
+                logger.info(
+                    "No training checkpoint found. Initializing model from HF checkpoint"
+                    f" '{converter.reference_checkpoint}'"
+                )
+                model = converter.load_pretrained(config.model, axis_mapping=parameter_axis_mapping)
+                model = named_jit(mp.cast_to_param, parameter_axis_mapping)(model)
 
-        return loss, model, opt_state
+                opt_state = named_jit(optimizer.init, axis_resources=parameter_axis_mapping)(model)
+            else:
+                logger.info("No checkpoint found. Starting from scratch.")
+                model, opt_state = named_jit(init_model_and_opt_state, axis_resources=parameter_axis_mapping)(
+                    model_key
+                )
 
-    # data loader. may need to seek to the right place if we're resuming
-    iter_datas = []
-    for i in range(len(train_loaders)):
-        iter_datas.append(non_caching_cycle(train_loaders[i]))
+        # boilerplate hooks and such
+        engine = TrainerHooks()
+        engine.add_hook(callbacks.pbar_logger(total=config.trainer.num_train_steps), every=1)
+        engine.add_hook(callbacks.log_to_wandb, every=1)
+        #engine.add_hook(callbacks.log_performance_stats(Pos.size, config.trainer.train_batch_size), every=1)
+        if config.trainer.max_eval_batches is None or config.trainer.max_eval_batches > 0:
+            engine.add_hook(
+                callbacks.compute_validation_loss(eval_loss, eval_loader, max_batches=config.trainer.max_eval_batches),
+                every=config.trainer.steps_per_eval,
+            )
+        engine.add_hook(callbacks.wandb_xla_logger(config.trainer.wandb), every=config.trainer.steps_per_eval)
+        # engine.add_hook(callbacks.log_memory_usage(), every=1)
+        checkpointer = config.trainer.checkpointer.create(config.trainer.run_id)
+        engine.add_hook(checkpointer.on_step, every=1)  # checkpointer manages its own frequency
+        if config.hf_save_path is not None:
+            full_save_path = os.path.join(config.hf_save_path, config.trainer.run_id)
+            from levanter.compat.hf_checkpoints import save_hf_checkpoint_callback
 
-    if resume_step is not None:
-        # step is after the batch, so we need to seek to step
-        # TODO: implement iter_data.seek(resume_step +1)
-        import tqdm
+            engine.add_hook(
+                save_hf_checkpoint_callback(full_save_path, converter),
+                every=config.hf_save_steps,
+            )
 
-        for _ in tqdm.tqdm(range(resume_step + 1), desc="seeking data for resume"):
-            next(iter_datas[curr_dataloader])
-            curr_data_idx += 1
-            if curr_data_idx == step_curriculum[curr_dataloader]:
-                curr_dataloader = (curr_dataloader + 1) % len(step_curriculum)
-                curr_data_idx = 0
-        initial_step = resume_step + 1
-    else:
-        initial_step = 0
+        # visualize log probs
+        @named_jit(
+            in_axis_resources=parameter_axis_mapping,
+            axis_resources=compute_axis_mapping,
+            out_axis_resources=compute_axis_mapping,
+        )
+        def compute_log_probs(model, example: LmExample, index=0):
+            model = mp.cast_to_compute(model)
+            logprobs = model.compute_loss(example, inference=True, key=None, reduction=None, index=index)
+            # roll forward to get the loss for each predicted token
+            logprobs = hax.roll(logprobs, 1, Pos_axes[index])
+            return logprobs.rearrange((EvalBatch, Pos_axes[index])).array
 
-    # assign these here in case num_train_steps == 0
-    step_loss = 0.0
-    step_time = lambda: 0.0  # noqa: E731
+        # engine.add_hook(
+        #     callbacks.compute_and_visualize_log_probs(
+        #         eval_loader, tokenizer, compute_log_probs, os.path.join(config.trainer.run_dir, "log_probs")
+        #     ),
+        #     every=config.trainer.steps_per_eval,
+        # )
+        #
+        # train step
+        @named_jit(axis_resources=parameter_axis_mapping, donate_args=True)
+        def train_step(model, opt_state, examples: LmExample, key, index=0):
+            grad_loss = eqx.filter_value_and_grad(compute_loss)
 
-    # finally, run the training loop
-    for step in range(initial_step, config.trainer.num_train_steps):
-        with capture_time() as step_time:
-            with log_time_to_wandb("throughput/loading_time", step=step):
-                example = next(iter_datas[curr_dataloader])
+            loss, grads = accumulate_gradients_sharded(
+                grad_loss,
+                Batch_axes[index],
+                model,
+                examples,
+                inference=False,
+                key=key,
+                index=index,
+                per_device_parallelism=config.trainer.per_device_parallelism[index],
+                parameter_axis_mapping=parameter_axis_mapping,
+            )
+
+            # distribute gradients across the mesh and apply them
+            updates, opt_state = optimizer.update(grads, opt_state, params=model)
+            model = eqx.apply_updates(model, updates)
+
+            return loss, model, opt_state
+
+        # data loader. may need to seek to the right place if we're resuming
+        iter_datas = []
+        for i in range(len(train_loaders)):
+            iter_datas.append(non_caching_cycle(train_loaders[i]))
+
+        if resume_step is not None:
+            # step is after the batch, so we need to seek to step
+            # TODO: implement iter_data.seek(resume_step +1)
+            import tqdm
+
+            for _ in tqdm.tqdm(range(resume_step + 1), desc="seeking data for resume"):
+                next(iter_datas[curr_dataloader])
                 curr_data_idx += 1
                 if curr_data_idx == step_curriculum[curr_dataloader]:
                     curr_dataloader = (curr_dataloader + 1) % len(step_curriculum)
                     curr_data_idx = 0
-                my_key, training_key = jrandom.split(training_key, 2)
+            initial_step = resume_step + 1
+        else:
+            initial_step = 0
 
-            #print("my_key", my_key)
-            #print("example", example)
-            jax_step_loss, model, opt_state = train_step(model, opt_state, example, my_key, index=curr_dataloader)
-            step_loss = jax_step_loss.item()
+        # assign these here in case num_train_steps == 0
+        step_loss = 0.0
+        step_time = lambda: 0.0  # noqa: E731
 
-        with log_time_to_wandb("throughput/hook_time", step=step):
-            engine.run_hooks(StepInfo(step, model, opt_state, step_loss, training_key, step_duration=step_time()))
+        # finally, run the training loop
+        for step in range(initial_step, config.trainer.num_train_steps):
+            with capture_time() as step_time:
+                with log_time_to_wandb("throughput/loading_time", step=step):
+                    example = next(iter_datas[curr_dataloader])
+                    curr_data_idx += 1
+                    if curr_data_idx == step_curriculum[curr_dataloader]:
+                        curr_dataloader = (curr_dataloader + 1) % len(step_curriculum)
+                        curr_data_idx = 0
+                    my_key, training_key = jrandom.split(training_key, 2)
 
-    last_step = StepInfo(
-        config.trainer.num_train_steps,
-        model,
-        opt_state,
-        step_loss,
-        training_key,
-        step_duration=step_time(),
-    )
+                #print("my_key", my_key)
+                #print("example", example)
+                jax_step_loss, model, opt_state = train_step(model, opt_state, example, my_key, index=curr_dataloader)
+                step_loss = jax_step_loss.item()
 
-    engine.run_hooks(last_step, force=True)
-    checkpointer.on_step(last_step, force=True)
+            with log_time_to_wandb("throughput/hook_time", step=step):
+                engine.run_hooks(StepInfo(step, model, opt_state, step_loss, training_key, step_duration=step_time()))
+
+        last_step = StepInfo(
+            config.trainer.num_train_steps,
+            model,
+            opt_state,
+            step_loss,
+            training_key,
+            step_duration=step_time(),
+        )
+
+        engine.run_hooks(last_step, force=True)
+        checkpointer.on_step(last_step, force=True)
 
 
 if __name__ == "__main__":
