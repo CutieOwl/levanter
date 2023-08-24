@@ -293,10 +293,6 @@ def main(config: TrainLmConfig):
             with capture_time() as step_time:
                 with log_time_to_wandb("throughput/loading_time", step=step):
                     example = next(iter_datas[curr_dataloader])
-                    curr_data_idx += 1
-                    if curr_data_idx == step_curriculum[curr_dataloader]:
-                        curr_dataloader = (curr_dataloader + 1) % len(step_curriculum)
-                        curr_data_idx = 0
                     my_key, training_key = jrandom.split(training_key, 2)
 
                 #print("my_key", my_key)
@@ -306,6 +302,11 @@ def main(config: TrainLmConfig):
 
             with log_time_to_wandb("throughput/hook_time", step=step):
                 engine.run_hooks(StepInfo(step, model, opt_state, step_loss, training_key, step_duration=step_time()))
+
+            curr_data_idx += 1
+            if curr_data_idx == step_curriculum[curr_dataloader]:
+                curr_dataloader = (curr_dataloader + 1) % len(step_curriculum)
+                curr_data_idx = 0
 
         last_step = StepInfo(
             config.trainer.num_train_steps,
