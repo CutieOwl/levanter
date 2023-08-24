@@ -91,11 +91,13 @@ class TrainerConfig:
     """mapping from logical axis to physical axis. batch_axis, fsdp_axis, and tensor_parallel_axes are preferred"""
     parameter_axis_resources: Mapping[str, str] = field(default_factory=dict)  # overrides axis_mapping for parameter
     """logical->physical mapping for parameter/optimizer sharding. fsdp_axis and tensor_parallel_axes are preferred"""
-    model_axis_size: int = 1  # how many devices to shard each model over. Data axis is the other axis
+    model_axis_size: List[int] = [1]  # how many devices to shard each model over. Data axis is the other axis
 
     # Config related to batch sizes
-    train_batch_size: int = 512
-    per_device_parallelism: int = -1
+    train_batch_size: List[int] = [512]
+    step_curriculum: List[int] = [1]
+    eval_idx: int = 0
+    per_device_parallelism: List[int] = [-1]
     """how many examples to process in parallel on each device. -1 (default) means train_batch_size/num_devices"""
 
     per_device_eval_parallelism: int = -1
@@ -163,21 +165,24 @@ class TrainerConfig:
             logger.info(f"At end of run, shutting down TPU VM in {self.shutdown_at_exit} seconds")
             atexit.register(cloud_utils.shutdown_tpu_vm, self.shutdown_at_exit)
 
-    @cached_property
-    def device_mesh(self) -> Mesh:
+    #@cached_property
+    def device_mesh(self, index) -> Mesh:
         devices = jax.devices()
-        devices = np.array(devices).reshape(self.data_axis_size, self.model_axis_size)
+        devices = np.array(devices).reshape(self.data_axis_size[index], self.model_axis_size[index])
         return Mesh(devices, (ResourceAxis.DATA, ResourceAxis.MODEL))
 
     @property
     def eval_batch_size(self):
-        return self.per_device_eval_parallelism * self.data_axis_size
+        return self.per_device_eval_parallelism * self.data_axis_size[self.eval_idx]
 
-    @property
+    @cached_property
     def data_axis_size(self):
         """size of the data parallel/batch parallel axis."""
-        assert jax.device_count() % self.model_axis_size == 0
-        return jax.device_count() // self.model_axis_size
+        data_axis_sizes = []
+        for i in range(len(self.model_axis_size)):
+            assert jax.device_count() % self.model_axis_size[i] == 0
+            data_axis_sizes.append(jax.device_count() // self.model_axis_size[i])
+        return data_axis_sizes
 
     @cached_property
     def compute_axis_mapping(self) -> ResourceMapping:
@@ -244,29 +249,33 @@ class TrainerConfig:
 
     # we can't do this in post_init because we don't want to call jax.device_count before calling distributed.initialize
     def _validate_and_set_defaults(self):
-        if jax.device_count() % self.model_axis_size != 0:
-            raise ValueError(
-                f"num_devices ({jax.device_count()}) is not divisible by model_axis_size ({self.model_axis_size})"
-            )
+        for i in range(len(self.model_axis_size)):
+            if jax.device_count() % self.model_axis_size[i] != 0:
+                raise ValueError(
+                    f"num_devices ({jax.device_count()}) is not divisible by model_axis_size ({self.model_axis_size[i]})"
+                )
 
-        if (
-            jax.local_device_count() % self.model_axis_size != 0
-            and self.model_axis_size % jax.local_device_count() != 0
-        ):
-            raise ValueError("either model_axis_size or local_device_count must be divisible by the other")
+        for i in range(len(self.model_axis_size)):
+            if (
+                jax.local_device_count() % self.model_axis_size[i] != 0
+                and self.model_axis_size[i] % jax.local_device_count() != 0
+            ):
+                raise ValueError("either model_axis_size or local_device_count must be divisible by the other")
 
-        if self.per_device_parallelism == -1:
-            self.per_device_parallelism = self.train_batch_size // jax.device_count()
+        for i in range(len(self.per_device_parallelism)):
+            if self.per_device_parallelism[i] == -1:
+                self.per_device_parallelism[i] = self.train_batch_size[i] // jax.device_count()
 
         # validate size of per_device_parallelism
-        if self.train_batch_size % (self.per_device_parallelism * self.data_axis_size) != 0:
-            raise ValueError(
-                f"train_batch_size ({self.train_batch_size}) must be divisible by per_device_parallelism *"
-                f" data_axis_size ({self.per_device_parallelism}, {self.data_axis_size})"
-            )
+        for i in range(len(self.per_device_parallelism)):
+            if self.train_batch_size[i] % (self.per_device_parallelism[i] * self.data_axis_size[i]) != 0:
+                raise ValueError(
+                    f"train_batch_size ({self.train_batch_size[i]}) must be divisible by per_device_parallelism *"
+                    f" data_axis_size ({self.per_device_parallelism[i]}, {self.data_axis_size[i]})"
+                )
 
         if self.per_device_eval_parallelism == -1:
-            self.per_device_eval_parallelism = self.per_device_parallelism
+            self.per_device_eval_parallelism = self.per_device_parallelism[self.eval_idx]
 
         if self.load_checkpoint_path is None:
             self.load_checkpoint_path = self.checkpointer.expanded_path(self.run_id)

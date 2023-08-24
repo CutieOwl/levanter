@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Dict, Optional, Type
+from typing import Callable, Dict, Optional, Type, List
 
 import equinox as eqx
 import jax
@@ -38,7 +38,7 @@ from levanter.utils.py_utils import cached_classproperty
 @LmConfig.register_subclass("gpt2")
 @dataclass(frozen=True)
 class Gpt2Config(HFCompatConfig):
-    seq_len: int = 512
+    seq_len: List[int] = [512]
     hidden_dim: int = 768
     num_layers: int = 12
     num_heads: int = 12
@@ -67,13 +67,19 @@ class Gpt2Config(HFCompatConfig):
     flash_attention_block_size: int = 1024
 
     # Axes
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
+    #Pos = property(lambda self: Axis(name="position", size=self.seq_len))
+    #KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
     Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
     Mlp = property(lambda self: Axis(name="mlp", size=self.hidden_dim * self.mlp_scale))
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
+
+    def Pos(self, index) -> Axis:
+        return Axis(name="position", size=self.seq_len[index])
+
+    def KeyPos(self, index) -> Axis:
+        return self.Pos(index).alias("key_position")
 
     @property
     def model_type(self) -> Type["Gpt2LMHeadModel"]:
@@ -84,13 +90,13 @@ class Gpt2Config(HFCompatConfig):
         # We trust this code because it's in our hub repo
         return HFCheckpointConverter(cls, "gpt2", ignore_prefix="transformer")
 
-    def to_hf_config(self, vocab_size, config_overrides=None) -> HfGpt2Config:
+    def to_hf_config(self, vocab_size, index, config_overrides=None) -> HfGpt2Config:
         if config_overrides is None:
             config_overrides = {}
 
         return HfGpt2Config(
             vocab_size=vocab_size,
-            n_positions=self.seq_len,
+            n_positions=self.seq_len[index],
             n_layer=self.num_layers,
             n_head=self.num_heads,
             n_embd=self.hidden_dim,
@@ -107,7 +113,7 @@ class Gpt2Config(HFCompatConfig):
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
         return Gpt2Config(
-            seq_len=hf_config.n_positions,
+            seq_len=[hf_config.n_positions],
             # vocab_size=config.vocab_size,
             num_layers=hf_config.n_layer,
             num_heads=hf_config.n_head,
@@ -167,7 +173,7 @@ class Gpt2Attention(StateDictSerializationMixin, eqx.Module):
         return Gpt2Attention(config, c_attn, c_proj, dropout)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttnMask], layer_idx, inference: bool = True, *, key):
+    def __call__(self, x: NamedArray, mask: Optional[AttnMask], layer_idx, inference: bool = True, *, key, index=0):
         qkv_out = self.c_attn(x).rearrange((..., "qkv", "heads", "position", "head_size"))
         q, k, v = qkv_out.unbind("qkv")
 
@@ -190,8 +196,8 @@ class Gpt2Attention(StateDictSerializationMixin, eqx.Module):
             q = q * scale
 
             attn_output = flash_attention(
-                self.config.Pos,
-                self.config.KeyPos,
+                self.config.Pos(index),
+                self.config.KeyPos(index),
                 self.config.HeadSize,
                 q,
                 k,
@@ -269,10 +275,10 @@ class Gpt2Block(StateDictSerializationMixin, eqx.Module):
         return Gpt2Block(ln_1, attn, ln_2, mlp, resid_dropout)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttnMask], layer_idx, inference, *, key):
+    def __call__(self, x: NamedArray, mask: Optional[AttnMask], layer_idx, inference, *, key, index=0):
         k1, k2, k3 = haliax.jax_utils.maybe_rng_split(key, 3)
 
-        attn_output = self.attn(self.ln_1(x), mask=mask, inference=inference, layer_idx=layer_idx, key=k1)
+        attn_output = self.attn(self.ln_1(x), mask=mask, inference=inference, layer_idx=layer_idx, key=k1, index=index)
         attn_output = self.resid_dropout(attn_output, key=k2, inference=inference)
         x = x + attn_output
 
@@ -300,9 +306,11 @@ class Gpt2Transformer(StateDictSerializationMixin, eqx.Module):
         return Gpt2Transformer(config, blocks, ln_f)
 
     @named_call
-    def __call__(self, x: NamedArray, attn_mask: Optional[AttnMask], *, inference, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, attn_mask: Optional[AttnMask], *, inference, key=None, index=0) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), inference, key=keys)
+        # create hax array with self.config.num_layers copies of index
+        index_arr = jnp.full((self.config.num_layers,), index)
+        x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), inference, key=keys, index=index_arr)
         x = self.ln_f(x)
 
         return x
@@ -382,9 +390,8 @@ class Gpt2LMHeadModel(eqx.Module, LmWithHfSerializationMixin[Gpt2Config]):
     def Vocab(self) -> Axis:
         return self.embeddings.Vocab
 
-    @property
-    def Pos(self) -> Axis:
-        return self.config.Pos
+    def Pos(self, index) -> Axis:
+        return self.config.Pos(index)
 
     @classmethod
     def init(cls, Vocab: Axis, config: Gpt2Config, *, key) -> "Gpt2LMHeadModel":
@@ -395,7 +402,7 @@ class Gpt2LMHeadModel(eqx.Module, LmWithHfSerializationMixin[Gpt2Config]):
         return Gpt2LMHeadModel(transformer, embeddings)
 
     def __call__(
-        self, input_ids: NamedArray, attn_mask: Optional[AttnMask] = None, *, inference: bool, key=None
+        self, input_ids: NamedArray, attn_mask: Optional[AttnMask] = None, *, inference: bool, key=None, index=0
     ) -> NamedArray:
         if not inference and key is None:
             raise ValueError("key must be provided for training")
@@ -405,7 +412,7 @@ class Gpt2LMHeadModel(eqx.Module, LmWithHfSerializationMixin[Gpt2Config]):
         print("key in gpt2", key)
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
         x = self.embeddings.embed(input_ids, inference=inference, key=k_embed)
-        x = self.transformer(x, attn_mask, inference=inference, key=k_transformer)
+        x = self.transformer(x, attn_mask, inference=inference, key=k_transformer, index=index)
         lm_logits = self.embeddings.unembed(x)
 
         return lm_logits
