@@ -20,6 +20,10 @@ trainer:
   model_axis_size: [1, 1]
   per_device_parallelism: [-1, -1]
 
+  checkpointer:
+    base_path: gs://levanter-eu/lakh-checkpoints/
+    save_interval: 30m
+
   train_batch_size: [512, 32]
   step_curriculum: [20, 3]
   eval_idx: 1

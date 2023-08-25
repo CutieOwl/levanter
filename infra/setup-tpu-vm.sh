@@ -92,7 +92,7 @@ pip install -U wheel
 retry pip install -U "jax[tpu]==0.4.13" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # clone levanter
-git clone --branch main_lakh_flash $REPO levanter-midi
+git clone --branch main_nope_mixin $REPO levanter-midi
 
 echo $VENV > levanter-midi/infra/venv_path.txt
 
