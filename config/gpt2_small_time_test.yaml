@@ -5,7 +5,7 @@ model:
   hidden_dim: 768
   num_heads: 12
   num_layers: 12
-  seq_len: [32]
+  seq_len: [128]
   gradient_checkpointing: true
   scale_attn_by_inverse_layer_idx: true
   embed_pdrop: 0.1
@@ -19,7 +19,7 @@ trainer:
   model_axis_size: [1]
   per_device_parallelism: [-1]
 
-  train_batch_size: [16384]
+  train_batch_size: [4096]
   step_curriculum: [1]
   eval_idx: 0
   num_train_steps: 100000
