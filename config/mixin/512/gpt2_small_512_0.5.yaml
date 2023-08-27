@@ -1,5 +1,6 @@
 data: 
 - !include data/openwebtext_source.yaml
+- !include ../../data/openwebtext_source.yaml
 model:
   type: gpt2
   hidden_dim: 768
