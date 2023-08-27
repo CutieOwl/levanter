@@ -5,7 +5,7 @@ set -x
 # usage: ./setup-tpu-vm.sh -b|--branch <git commit or branch for levanter> -r <git repo for levanter>
 
 REPO="https://github.com/CutieOwl/levanter-midi.git"
-BRANCH=main_lakh
+BRANCH=main_nope_mixin
 
 while [[ $# -gt 0 ]]; do
   key="$1"
