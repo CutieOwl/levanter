@@ -105,6 +105,17 @@ def main(config: TrainLmConfig):
 
     eval_idx = config.trainer.eval_idx
     step_curriculum = config.trainer.step_curriculum
+    num_train_steps = config.trainer.num_train_steps
+
+    superstep_length = 0
+    for i in range(len(step_curriculum)):
+        superstep_length += step_curriculum[i]
+    print("superstep length", superstep_length)
+    
+    step_blocks = []
+    for i in range(len(step_curriculum)):
+        step_blocks.append((num_train_steps * step_curriculum[i]) // superstep_length)
+    print("step_blocks", step_blocks)
 
     eval_loader = ReplicatedBatchLoader(
         CausalLmDataset(config.data[eval_idx].token_seq_dataset("validation", Pos_axes[eval_idx].size), Pos_axes[eval_idx], KeyPos_axes[eval_idx]),
@@ -277,8 +288,9 @@ def main(config: TrainLmConfig):
             for _ in tqdm.tqdm(range(resume_step + 1), desc="seeking data for resume"):
                 next(iter_datas[curr_dataloader])
                 curr_data_idx += 1
-                if curr_data_idx == step_curriculum[curr_dataloader]:
+                if curr_data_idx == step_blocks[curr_dataloader]:
                     curr_dataloader = (curr_dataloader + 1) % len(step_curriculum)
+                    print("step", resume_step, "changing to dataloader", curr_dataloader)
                     curr_data_idx = 0
             initial_step = resume_step + 1
         else:
@@ -304,8 +316,9 @@ def main(config: TrainLmConfig):
                 engine.run_hooks(StepInfo(step, model, opt_state, step_loss, training_key, step_duration=step_time()))
 
             curr_data_idx += 1
-            if curr_data_idx == step_curriculum[curr_dataloader]:
+            if curr_data_idx == step_blocks[curr_dataloader]:
                 curr_dataloader = (curr_dataloader + 1) % len(step_curriculum)
+                print("step", step, "changing to dataloader", curr_dataloader)
                 curr_data_idx = 0
 
         last_step = StepInfo(
