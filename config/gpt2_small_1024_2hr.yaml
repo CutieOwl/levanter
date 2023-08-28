@@ -19,6 +19,9 @@ trainer:
   model_axis_size: [1]
   per_device_parallelism: [-1]
 
+  checkpointer:
+    base_path: gs://levanter-eu/gpt-checkpoints/
+
   train_batch_size: [512]
   step_curriculum: [1]
   eval_idx: 0
