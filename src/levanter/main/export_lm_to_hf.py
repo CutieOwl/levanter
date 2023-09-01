@@ -13,7 +13,7 @@ from haliax import Axis
 
 import levanter
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
-from levanter.models.gpt2 import Gpt2Config
+from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmConfig
 from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore
 
@@ -53,12 +53,12 @@ def main(config: ConvertLmConfig):
     key = jax.random.PRNGKey(0)
 
     with jax.default_device(jax.devices("cpu")[0]):
-        model = eqx.filter_eval_shape(config.model.build(Vocab, key=key), Vocab, config.model, key=key)
+        model = Gpt2LMHeadModel.init(Vocab, config.model, key=key)
 
         with hax.enable_shape_checks(False):
             model = tree_deserialize_leaves_tensorstore(os.path.join(config.checkpoint_path, "model"), model)
 
-        model = htu.resize_axis(model, Vocab.resize(vocab_size), key=key)
+        model = htu.resize_axis(model, Vocab, vocab_size, key=key)
 
         converter = model.config.default_hf_checkpoint_converter.replaced(tokenizer=tokenizer)
 
