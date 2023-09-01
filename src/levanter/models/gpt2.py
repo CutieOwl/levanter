@@ -310,9 +310,8 @@ class Gpt2Transformer(StateDictSerializationMixin, eqx.Module):
     def __call__(self, x: NamedArray, attn_mask: Optional[AttnMask], *, inference, key=None, index=0) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
         # create hax array with self.config.num_layers copies of index
-        inference_arr = jnp.full((self.config.num_layers,), inference)
         index_arr = jnp.full((self.config.num_layers,), index)
-        x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), inference_arr, key=keys, index=index_arr)
+        x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), inference, key=keys, index=index_arr)
         x = self.ln_f(x)
 
         return x
