@@ -30,7 +30,7 @@ trainer:
     base_path: gs://levanter-eu/lakh-checkpoints/
     save_interval: 30m
 
-  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/sh3q0te2/step-11373"
+  load_checkpoint_path: "gs://levanter-eu/lakh-checkpoints/sh3q0te2/step-10000"
 
   train_batch_size: [32]
   step_curriculum: [1]
