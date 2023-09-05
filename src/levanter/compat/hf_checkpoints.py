@@ -512,7 +512,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             self.tokenizer.save_pretrained(path)
 
         # Config
-        config = model.config.to_hf_config(model.Vocab.size)
+        config = model.config.to_hf_config(model.Vocab.size, index=0)
         dict_config = config.to_dict()
 
         # copy over the default keys
