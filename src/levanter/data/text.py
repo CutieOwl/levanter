@@ -52,6 +52,7 @@ from levanter.data.shard_cache import (  # noqa
     build_cache,
 )
 from levanter.data.sharded_dataset import ShardedDataset, TextUrlDataset, WrappedHFDataset  # noqa
+from levanter.data.shard_source import HFDatasetDataSource, JsonlDataSource, TextDataSource, ShardedDataSource  # noqa
 from levanter.shapes import NamedShapeSpec, ShapeSpec  # noqa
 from levanter.utils.jax_utils import use_cpu_device  # noqa
 
@@ -518,7 +519,9 @@ class LMDatasetSourceConfig:
 @dataclass
 class LMTaskConfig(abc.ABC):
     tokenizer: str = "gpt2"
-    vocab_size: Optional[int] = None  # if using the passthrough tokenizer, this is required
+    plaintext: bool = False
+    vocab_size: Optional[int] = None
+    text_key: str = "text"  # key for the text field in the jsonl file or hf dataset
 
     # config related to caching
     cache_dir: str = "cache/"
@@ -528,6 +531,7 @@ class LMTaskConfig(abc.ABC):
     @cached_property
     def the_tokenizer(self) -> PreTrainedTokenizerBase:
         if self.tokenizer == "passthrough":
+            print(f"using passthrough tokenizer with vocab size {self.vocab_size}")
             return PassthroughTokenizer(self.vocab_size)
         else:
             return load_tokenizer(self.tokenizer)
@@ -583,6 +587,20 @@ class LMDatasetConfig(LMDatasetSourceConfig, LMTaskConfig):
             await_finished=(split == "validation"),
         )
 
+    def doc_iterator(self, split: str):
+        if self.id is not None:
+            dataset = datasets.load_dataset(self.id, name=self.name, streaming=self.stream)
+            data = dataset[split]
+            for doc in data:
+                yield doc[self.text_key]
+        else:
+            urls = self.urls_for_split(split)
+
+            source = TextDataSource if self.plaintext else JsonlDataSource
+            for doc in source(urls).iter_data():
+                yield doc[self.text_key]
+
+        return dict_source.map(lambda x: x[self.text_key])
 
 class PassthroughTokenizer(PreTrainedTokenizer):
     def __init__(self, vocab_size, **kwargs):
