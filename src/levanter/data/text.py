@@ -595,11 +595,33 @@ class LMDatasetConfig(LMDatasetSourceConfig, LMTaskConfig):
         else:
             urls = self.urls_for_split(split)
 
-            source = TextDataSource if self.plaintext else JsonlDataSource
-            for doc in source(urls).iter_data():
-                yield doc[self.text_key]
+            yield from TextUrlDataSource(urls, self.text_key).iter_data()
 
-        return dict_source.map(lambda x: x[self.text_key])
+    def urls_for_split(self, split):
+        if split == "train":
+            urls = self.train_urls
+        elif split == "validation":
+            urls = self.validation_urls
+        else:
+            raise ValueError(f"Unknown split {split}")
+
+        def fsspec_expand_glob(url):
+            if "*" in url:
+                fs = fsspec.core.url_to_fs(url)[0]
+                return fs.glob(url)
+            else:
+                return [url]
+
+        urls = [globbed for pat in urls for url in braceexpand.braceexpand(pat) for globbed in fsspec_expand_glob(url)]
+        return urls
+
+    def get_shard_source(self, split) -> ShardedDataSource[str]:
+        if self.id is not None:
+            return HFDatasetDataSource(self.id, split=split, name=self.name, streaming=self.stream).map(
+                lambda x: x[self.text_key]
+            )
+        else:
+            return TextUrlDataSource(self.urls_for_split(split), self.text_key)
 
 class PassthroughTokenizer(PreTrainedTokenizer):
     def __init__(self, vocab_size, **kwargs):
