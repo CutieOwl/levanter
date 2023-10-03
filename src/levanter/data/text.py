@@ -531,7 +531,6 @@ class LMTaskConfig(abc.ABC):
     @cached_property
     def the_tokenizer(self) -> PreTrainedTokenizerBase:
         if self.tokenizer == "passthrough":
-            print(f"using passthrough tokenizer with vocab size {self.vocab_size}")
             return PassthroughTokenizer(self.vocab_size)
         else:
             return load_tokenizer(self.tokenizer)
