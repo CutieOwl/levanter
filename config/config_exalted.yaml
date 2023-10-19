@@ -1,0 +1,5 @@
+model:
+  hidden_dim: 512
+  num_heads: 8
+  num_layers: 4
+  seq_len: 1024
