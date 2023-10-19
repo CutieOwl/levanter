@@ -1,9 +1,9 @@
 data:
   train_urls:
-      - "gs://levanter-data/audio-data/train.txt"
+      - "gs://levanter-data/audio-data/sharded-shuf/train.shard-{0..31}.txt"
   validation_urls:
       - "gs://levanter-data/audio-data/valid-small.txt"
-  cache_dir: "gs://levanter-data/audio-data/cache/"
+  cache_dir: "gs://levanter-data/audio-data/cache-shuf/"
   tokenizer: "passthrough"
   plaintext: True
   vocab_size: 1127
