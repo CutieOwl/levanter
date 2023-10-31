@@ -7,8 +7,8 @@ if [ "$DEBUG" == "1" ]; then
   set -x
 fi
 
-REPO="https://github.com/stanford-crfm/levanter.git"
-BRANCH=main
+REPO="https://github.com/CutieOwl/levanter-midi.git"
+BRANCH=audio
 
 if [ "$GIT_BRANCH" != "" ]; then
   BRANCH="$GIT_BRANCH"
