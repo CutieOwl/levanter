@@ -33,7 +33,7 @@ trainer:
     base_path: gs://levanter-data/audio-checkpoints/
     save_interval: 30m
 
-  load_checkpoint_path:  gs://levanter-data/audio-checkpoints/mgwkvk9s/step-13811/
+  # load_checkpoint_path:  gs://levanter-data/audio-checkpoints/mgwkvk9s/step-13811/
 
   axis_resources:
     batch: "data"
