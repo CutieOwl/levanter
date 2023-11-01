@@ -311,26 +311,14 @@ def _produce_chunks_for_shard(
             yield_chunk(chunk)
 
     logger.info(f"Starting to get rows for shard {shard_name}")
-    try:
-        for row in shard_iter:
-            batch.append(row)
+    for row in shard_iter:
+        batch.append(row)
 
-            if len(batch) % 20 == 0:
-                print(f"batch: {len(batch)}", flush=True)
-
-            if len(batch) == target_batch_size:
-                print("batch")
-                do_preprocess(batch)
-                print("done batch")
-                batch = []
-    except Exception as e:
-        print("exception", flush=True)
-        logger.exception(f"Error while processing shard {shard_name}")
-        ray.get(sink.shard_failed.remote(shard_name, _exc_info()))
-        raise e
+        if len(batch) == target_batch_size:
+            do_preprocess(batch)
+            batch = []
 
     if batch:
-        print("tiny batch", flush=True)
         do_preprocess(batch)
     if writer is not None:
         writer.__exit__(None, None, None)
@@ -1018,11 +1006,6 @@ class ShardCache(Iterable[pa.RecordBatch]):
         yield from self._read_chunk(chunk)
 
     def _map_index(self, index):
-        print(
-            f"{index} -> {index * self._num_readers + self._reader_offset}, {self._num_readers},"
-            f" {self._reader_offset}",
-            flush=True,
-        )
         return index * self._num_readers + self._reader_offset
 
     def get_chunk(self, index: int, *, timeout: Optional[float] = None) -> ChunkMetadata:
@@ -1135,8 +1118,8 @@ class ShardCache(Iterable[pa.RecordBatch]):
         if num_readers == 1:
             return self
 
+        new_offset = self._reader_offset * num_readers + offset
         new_num_readers = self._num_readers * num_readers
-        new_offset = self._num_readers * offset + self._reader_offset
         return ShardCache(self.cache_dir, self._batch_size, self._ledger, self._broker, new_offset, new_num_readers)
 
     def unshard(self):
