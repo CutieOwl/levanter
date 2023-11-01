@@ -55,7 +55,7 @@ def main(config: TrainLmConfig):
     if config.initialize_from_hf:
         assert isinstance(config.model, HFCompatConfig)
         converter = config.model.default_hf_checkpoint_converter
-        if tokenizer.vocab != converter.tokenizer.vocab:
+        if tokenizer._vocab != converter.tokenizer.vocab:
             logger.warning("The tokenizers appear to be different. You may want to check this.")
 
         if isinstance(config.initialize_from_hf, str):
