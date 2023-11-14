@@ -4,10 +4,8 @@ from functools import partial
 from typing import Callable, Dict, Optional, Type
 
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-from jax._src.random import PRNGKey
 from jaxtyping import PRNGKeyArray
 from transformers import GPT2Config as HfGpt2Config
 from transformers import PretrainedConfig as HfConfig
@@ -29,8 +27,7 @@ from levanter.compat.torch_serialization import (
     unflatten_linear_layers,
     unstack_state_dict,
 )
-from levanter.models.attention import AttnMask, materialize_mask
-from levanter.models.flash_attention import flash_attention
+from levanter.models.attention import AttentionMask, dot_product_attention
 from levanter.models.lm_model import LmConfig
 from levanter.utils.py_utils import cached_classproperty
 
@@ -152,7 +149,7 @@ class Gpt2Attention(StateDictSerializationMixin, eqx.Module):
 
     c_attn: hnn.Linear  # input projection from [embed] -> [(q, k, v), heads, head_dim]
     c_proj: hnn.Linear  # output projection from [heads, head_dim] -> [embed]
-    dropout: hnn.Dropout
+    inference: bool
 
     @staticmethod
     def init(config: Gpt2Config, *, key) -> "Gpt2Attention":
@@ -163,12 +160,11 @@ class Gpt2Attention(StateDictSerializationMixin, eqx.Module):
         k_c, k_proj = jrandom.split(key, 2)
         c_attn = hnn.Linear.init(In=Embed, Out=(Qkv, config.Heads, config.HeadSize), key=k_c, use_bias=use_bias)
         c_proj = hnn.Linear.init(In=(config.Heads, config.HeadSize), Out=Embed, key=k_proj, use_bias=use_bias)
-        dropout = hnn.Dropout(config.attn_pdrop)
 
-        return Gpt2Attention(config, c_attn, c_proj, dropout)
+        return Gpt2Attention(config, c_attn, c_proj, inference=False)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttnMask], layer_idx, *, key):
+    def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
         k_drop, k_attn, k_out = hax.jax_utils.maybe_rng_split(key, 3)
         qkv_out = self.c_attn(x, key=k_attn).rearrange((..., "qkv", "heads", "position", "head_size"))
         q, k, v = qkv_out.unbind("qkv")
@@ -178,50 +174,24 @@ class Gpt2Attention(StateDictSerializationMixin, eqx.Module):
         v = v.rename({"position": "key_position"})
 
         # mistral tweak: attention scores can overflow FP16, or just be too imprecise, so upcast to FP32
-        if self.config.upcast_attn:
-            q = q.astype(jnp.float32)
-            k = k.astype(jnp.float32)
+        if self.config.scale_attn_by_inverse_layer_idx:
+            q = q / (layer_idx + 1.0)
 
-        if self.config.use_flash_attention:
-            # mistral tweak: scale norms by 1/sqrt(layer_idx) to prevent blowup
-            if self.config.scale_attn_by_inverse_layer_idx:
-                scale = 1 / (layer_idx + 1.0)
-            else:
-                scale = 1.0
-            # FA scales by 1/sqrt(head_size)
-            q = q * scale
-
-            attn_output = flash_attention(
-                self.config.Pos,
-                self.config.KeyPos,
-                self.config.HeadSize,
-                q,
-                k,
-                v,
-                block_size=self.config.flash_attention_block_size,
-                mask=mask,
-                inference=self.dropout.inference,
-                key=k_drop,
-            )
-            attn_output = self.c_proj(attn_output, key=k_out)
-        else:
-            scale = jax.lax.rsqrt(float(self.config.HeadSize.size))
-            if self.config.scale_attn_by_inverse_layer_idx:
-                scale /= layer_idx + 1.0
-
-            q = q * scale
-
-            attn_scores = hax.dot("head_size", q, k)
-
-            if mask is not None:
-                mask = materialize_mask(mask)
-                attn_scores = attn_scores + (1.0 - mask) * -1e9
-
-            attn_weights = hnn.softmax(attn_scores, axis="key_position").astype(x.dtype)
-            attn_weights = self.dropout(attn_weights, key=k_drop)
-
-            attn_output = hax.dot("key_position", attn_weights, v)  # [heads, seq_len, head_dim]
-            attn_output = self.c_proj(attn_output, key=k_out)
+        attn_output = dot_product_attention(
+            "position",
+            "key_position",
+            "head_size",
+            q,
+            k,
+            v,
+            mask=mask,
+            inference=self.inference,
+            use_flash=self.config.use_flash_attention,
+            flash_block_size=self.config.flash_attention_block_size,
+            prng=k_drop,
+            attention_dtype=jnp.float32 if self.config.upcast_attn else None,
+        )
+        attn_output = self.c_proj(attn_output, key=k_out)
 
         if self.config.upcast_attn:
             attn_output = attn_output.astype(x.dtype)
@@ -272,7 +242,7 @@ class Gpt2Block(StateDictSerializationMixin, eqx.Module):
         return Gpt2Block(ln_1, attn, ln_2, mlp, resid_dropout)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttnMask], layer_idx, *, key):
+    def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
         k1, k2, k3, k4 = haliax.jax_utils.maybe_rng_split(key, 4)
 
         attn_output = self.attn(self.ln_1(x), mask=mask, layer_idx=layer_idx, key=k1)
@@ -303,7 +273,7 @@ class Gpt2Transformer(StateDictSerializationMixin, eqx.Module):
         return Gpt2Transformer(config, blocks, ln_f)
 
     @named_call
-    def __call__(self, x: NamedArray, attn_mask: Optional[AttnMask], *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, attn_mask: Optional[AttentionMask | NamedArray], *, key=None) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), key=keys)
         x = self.ln_f(x)
@@ -339,25 +309,35 @@ class Gpt2Embeddings(StateDictSerializationMixin, eqx.Module):
     config: Gpt2Config = eqx.static_field()
 
     token_embeddings: NamedArray
-    position_embeddings: NamedArray
+    #position_embeddings: NamedArray
     dropout: hnn.Dropout
+
+    token_out_embeddings_0: NamedArray
+    token_out_embeddings_1: NamedArray
+    token_out_embeddings_2: NamedArray
+    token_out_embeddings_3: NamedArray
 
     @staticmethod
     def init(Vocab: Axis, config: Gpt2Config, *, key) -> "Gpt2Embeddings":
-        k_wte, k_wpe, k_out = jrandom.split(key, 3)
+        k_wte, k_out = jrandom.split(key, 2) # k_wpe, 
 
         token_embeddings = hax.random.normal(k_wte, (Vocab, config.Embed)) * config.initializer_range
-        position_embeddings = hax.random.normal(k_wpe, (config.Pos, config.Embed)) * (config.initializer_range / 2)
+        #position_embeddings = hax.random.normal(k_wpe, (config.Pos, config.Embed)) * (config.initializer_range / 2)
         dropout = hnn.Dropout(pdrop=config.embed_pdrop)
 
-        return Gpt2Embeddings(Vocab, config, token_embeddings, position_embeddings, dropout)
+        token_out_embeddings_0 = hax.random.normal(k_out, (Vocab, config.Embed)) * config.initializer_range
+        token_out_embeddings_1 = hax.random.normal(k_out, (Vocab, config.Embed)) * config.initializer_range
+        token_out_embeddings_2 = hax.random.normal(k_out, (Vocab, config.Embed)) * config.initializer_range
+        token_out_embeddings_3 = hax.random.normal(k_out, (Vocab, config.Embed)) * config.initializer_range
+
+        return Gpt2Embeddings(Vocab, config, token_embeddings, dropout, token_out_embeddings_0, token_out_embeddings_1, token_out_embeddings_2, token_out_embeddings_3) #, position_embeddings
 
     @named_call
     def embed(self, input_ids, *, key):
         input_embeds = self.token_embeddings.take("vocab", input_ids)
-        position_embeds = self.position_embeddings
+        # position_embeds = self.position_embeddings
 
-        x = input_embeds + position_embeds
+        x = input_embeds #+ position_embeds
         x = self.dropout(x, key=key)
 
         return x
@@ -365,8 +345,20 @@ class Gpt2Embeddings(StateDictSerializationMixin, eqx.Module):
     def unembed(self, x: NamedArray):
         return hax.dot("embed", x, self.token_embeddings)
 
+    def unembed_0(self, x: NamedArray):
+        return hax.dot("embed", x, self.token_out_embeddings_0)  
+
+    def unembed_1(self, x: NamedArray):
+        return hax.dot("embed", x, self.token_out_embeddings_1)  
+
+    def unembed_2(self, x: NamedArray):
+        return hax.dot("embed", x, self.token_out_embeddings_2)  
+
+    def unembed_3(self, x: NamedArray):
+        return hax.dot("embed", x, self.token_out_embeddings_3)  
+
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
-        return {"token_embeddings": "wte.weight", "position_embeddings": "wpe.weight"}
+        return {"token_embeddings": "wte.weight", "token_out_embeddings_0": "lm_head0.weight", "token_out_embeddings_1": "lm_head1.weight", "token_out_embeddings_2": "lm_head2.weight", "token_out_embeddings_3": "lm_head3.weight"} #, "position_embeddings": "wpe.weight"}
 
     def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
         new_weights = hax.tree_util.resize_axis(self.token_embeddings, self.Vocab, new_size, key=key)
@@ -397,15 +389,45 @@ class Gpt2LMHeadModel(eqx.Module, LmWithHfSerializationMixin[Gpt2Config]):
 
         return Gpt2LMHeadModel(transformer, embeddings)
 
-    def __call__(self, input_ids: NamedArray, attn_mask: Optional[AttnMask] = None, *, key=None) -> NamedArray:
+    def __call__(
+        self, input_ids: NamedArray, attn_mask: Optional[AttentionMask | NamedArray] = None, *, key=None
+    ) -> NamedArray:
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
         x = self.embeddings.embed(input_ids, key=k_embed)
-        x = self.transformer(x, attn_mask, key=k_transformer)
-        lm_logits = self.embeddings.unembed(x)
+
+        Batch = input_ids.axes[0]
+        Position = x.axes[1]
+        Embed = x.axes[2]
+
+        raw_1 = x.array
+        sum_states = raw_1[:,0::4,:] + raw_1[:,1::4,:] + raw_1[:,2::4,:] + raw_1[:,3::4,:]
+
+        new_seq_len = sum_states.shape[1]
+        new_Position = Axis("position", new_seq_len)
+        new_KeyPosition = new_Position.alias(f"key_{new_Position.name}")
+        new_axes = (Batch, new_Position, Embed)
+        new_x = NamedArray(sum_states, new_axes)
+
+        new_attn_mask = hax.nn.attention.causal_mask(new_Position, new_KeyPosition)
+        # NOTE: the above attention mask does not do forgetful casual masking, even if that parameter was specified in the original config!
+
+        x = self.transformer(new_x, new_attn_mask, key=k_transformer) 
+        
+        lm_logits_0 = self.embeddings.unembed_0(x)
+        lm_logits_1 = self.embeddings.unembed_1(x)
+        lm_logits_2 = self.embeddings.unembed_2(x)
+        lm_logits_3 = self.embeddings.unembed_3(x)
+
+        raw_2 = jnp.ones((Batch.size, new_seq_len * 4, self.embeddings.Vocab.size))
+        raw_2 = raw_2.at[:,0::4,:].set(lm_logits_0.array)
+        raw_2 = raw_2.at[:,1::4,:].set(lm_logits_1.array)
+        raw_2 = raw_2.at[:,2::4,:].set(lm_logits_2.array)
+        raw_2 = raw_2.at[:,3::4,:].set(lm_logits_3.array)
+        lm_logits = NamedArray(raw_2, (Batch, Position, self.embeddings.Vocab))
 
         return lm_logits
 
-    def resize_vocab(self, new_size: int, key: Optional[PRNGKey] = None) -> "Gpt2LMHeadModel":
+    def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "Gpt2LMHeadModel":
         new_embeddings = self.embeddings.resize_embeddings(new_size, key=key)
         return dataclasses.replace(self, embeddings=new_embeddings)
 
