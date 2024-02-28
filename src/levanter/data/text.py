@@ -357,10 +357,6 @@ class BatchTokenizer(BatchProcessor[str]):
         self._max_sentence_len = _max_sentence_len
 
     def __call__(self, batch: Sequence[str]) -> BatchEncoding:
-        # print("batch len", len(batch))
-        # print("batch[0]", batch[0])
-        #print("tokenizing batch ", batch)
-
         # break strings at the sentence level
         orig_batch = batch
         batch = []
@@ -381,62 +377,42 @@ class BatchTokenizer(BatchProcessor[str]):
             split_sentences = re.split(r'(?<=[.!?])\s+', d)
             sentences = []
             for i in range(len(split_sentences)):
-                if len(split_sentences[i]) > 0:
+                if len(split_sentences[i]) > 0 and len(split_sentences[i]) < self._max_sentence_len:
+                    # ignore special case of "sentence is too long to fit in max_sentence_len (consider using a special character)?
                     if not split_sentences[i].startswith(" "):
                         split_sentences[i] = " " + split_sentences[i]
                     sentences.append(split_sentences[i])
             word_counts = [len(s.split()) for s in sentences] # could alternatively try token counts
-            # if sentences[len(sentences) - 1].startswith(self.tokenizer.eos_token):
-            #     sentences[len(sentences) - 2] += sentences[len(sentences) - 1]
-            #     sentences.pop()
-            # print("original batch:", d)
-            # print("word counts:", word_counts)
 
             if sentences: # if we didn't delete everything in d
-                # print("sentences:", sentences)
+                if self._need_to_add_eos:
+                    sentences.extend([self.tokenizer.eos_token])
+                    word_counts.append(1)
+
                 batch.extend(sentences)
                 wc.extend(word_counts)
                 needs_merge.append(False)
                 needs_merge.extend([True] * (len(sentences) - 1))
 
-                if self._need_to_add_eos:
-                    # print("adding")
-                    batch.extend([self.tokenizer.eos_token])
-                    wc.append(1)
-                    needs_merge.append(True)
-
             if self._needs_long_sequence_workaround:
                 for sentence in sentences:
                     if len(sentence) > self._workaround_len:
                         print("Need a workaround because sentence exceeds length ", self._workaround_len)
-        # orig_batch = batch
-        # batch = []
-        # for i, d in enumerate(orig_batch):
 
         encoding = self.tokenizer(batch, return_attention_mask=False, verbose=False)  # type: ignore
 
-        # print("needs merge", needs_merge)
-        # print("vocab size", self._vocab_size, "eos token id", self._eos_token_id, "encoding", encoding)
-        #print("encoded batch[0] as:", encoding[0])
-        #print("adding encoding[0] and encoding[1]:", encoding[0] + )
-
         if needs_merge:
-            new_encoding = self._merge_split_encodings(batch, encoding, needs_merge, wc, eos_token_id=self._eos_token_id, max_sentence_len=self._max_sentence_len)
+            new_encoding = self._merge_split_encodings(batch, encoding, needs_merge, wc, eos_token_id=self._eos_token_id)
             encoding = BatchEncoding(new_encoding)
 
         return encoding
 
     @staticmethod
-    def _merge_split_encodings(batch, encoding, needs_merge, wc, eos_token_id, max_sentence_len):
+    def _merge_split_encodings(batch, encoding, needs_merge, wc, eos_token_id):
         # merge the encodings back together
         # we might need to merge multiple encodings together
         # needs merge marks the first n-1 encodings that need to be merged for each document
         new_encoding = {}
-        # print("performing merge")
-        # print("needs_merge len", len(needs_merge))
-        # print("word counts len", len(wc))
-        # print("batch len", len(batch))
-        # print("encoding len", len(encoding.items()))
         for k, v in encoding.items():
             if len(v) == 0:
                 continue
@@ -449,12 +425,8 @@ class BatchTokenizer(BatchProcessor[str]):
                         v_out.append(np.concatenate(vs_to_merge))
                         vs_to_merge = []
                     sentence_len = wc[i] + eos_token_id + 1 # eos_token_id + 2 means 1 sentence length, eos_token_id + 1 is reserved for special case
-                    if wc[i] < max_sentence_len and v[i][0] != eos_token_id:
-                        # ignore special case of "sentence is too long to fit in max_sentence_len (consider using a special character)?
-                        # also don't append sentence length if it's just the eos token
-                        # print("word count", wc[i])
-                        # print("sentence len", sentence_len)
-                        # print("sentence", v[i])
+                    if v[i][0] != eos_token_id:
+                        # don't append sentence length if it's just the eos token
                         v[i] = [sentence_len] + v[i]
                     vs_to_merge.append(v[i])
 
@@ -471,15 +443,9 @@ class BatchTokenizer(BatchProcessor[str]):
                             v_out.append(list(chain(*vs_to_merge)))
                         vs_to_merge = []
                     sentence_len = wc[i] + eos_token_id + 1 # eos_token_id + 2 means 1 sentence length, eos_token_id + 1 is reserved for special case
-                    if wc[i] < max_sentence_len and v[i][0] != eos_token_id:
-                        # ignore special case of "sentence is too long to fit in max_sentence_len (consider using a special character)?
-                        # also don't append sentence length if it's just the eos token
-                        # print("word count", wc[i])
-                        # print("sentence len", sentence_len)
-                        # print("sentence", v[i])
+                    if v[i][0] != eos_token_id:
+                        # don't append sentence length if it's just the eos token
                         v[i] = [sentence_len] + v[i]
-                    # print("type v[i]", type(v[i]))
-                    # print("type v[i][0]", type(v[i][0]))
                     vs_to_merge.append(v[i])
 
                 if len(vs_to_merge) > 0:
