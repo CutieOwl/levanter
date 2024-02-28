@@ -16,6 +16,9 @@ trainer:
   model_axis_size: 1
   per_device_parallelism: -1
 
+  checkpointer:
+    base_path: "/juice4/scr4/kathli/checkpoints"
+
   train_batch_size: 512
 optimizer:
   learning_rate: 6E-4

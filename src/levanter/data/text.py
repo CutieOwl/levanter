@@ -399,13 +399,15 @@ class BatchTokenizer(BatchProcessor[str]):
                     if len(sentence) > self._workaround_len:
                         print("Need a workaround because sentence exceeds length ", self._workaround_len)
 
+        if len(batch) == 0:
+            # if we deleted everything, just return encoding of just the end token
+            # this is a little hacky... not sure if it will work
+            vs_to_merge = [[self._eos_token_id]]
+            return BatchEncoding({"input_ids": [list(chain(*vs_to_merge))]})
         encoding = self.tokenizer(batch, return_attention_mask=False, verbose=False)  # type: ignore
 
         if needs_merge:
             new_encoding = self._merge_split_encodings(batch, encoding, needs_merge, wc, eos_token_id=self._eos_token_id)
-            for k, v in new_encoding.items():
-                if len(v) == 0:
-                    print("Empty encoding for ", k)
             encoding = BatchEncoding(new_encoding)
 
         return encoding

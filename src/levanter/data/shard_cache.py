@@ -185,6 +185,12 @@ class SerialCacheWriter(AbstractContextManager):
         return ShardCache.load(self.cache_dir, batch_size=batch_size)
 
     def write_batch(self, batch: BatchResult):
+        # don't do anything if the batch is empty
+        # print("size of batch", len(batch.items()))
+        # print(batch)
+        if len(batch.items()) == 0:
+            print("empty batch")
+            return
         rb = as_record_batch(batch)
 
         while rb.num_rows > 0:
@@ -815,6 +821,11 @@ def _mk_queue_aware_process_task(processor: BatchProcessor[T], queue: ActorHandl
         try:
             result = processor(batch)
             del batch
+            #print("size of result", len(result.items()))
+            #print(result)
+            if len(result.items()) == 0:
+                print("empty batch")
+                return None
             result = as_record_batch(result)
             logger.debug(f"Finished processing batch {desc}")
             return result
@@ -882,7 +893,9 @@ class _BatchProcessorQueue:  # (Generic[T]): ray doesn't like generics
             self.ready = False
             item = self.pqueue.get()
             batch = item.batch
-            item.task_future.set_result(self._task_processor.remote(item.desc, batch))
+            result = self._task_processor.remote(item.desc, batch)
+            if result is not None:
+                item.task_future.set_result(result)
 
     def task_running(self):
         self.ready = True
