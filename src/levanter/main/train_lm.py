@@ -45,6 +45,8 @@ class TrainLmConfig:
     hf_upload: Optional[str] = None
     hf_save_steps: int = 10000
 
+    max_sentence_len: int = 1024
+
 
 def main(config: TrainLmConfig):
     tokenizer = config.data.the_tokenizer
@@ -105,10 +107,11 @@ def main(config: TrainLmConfig):
             config.data.train_set(Pos.size), Pos, KeyPos, ignore_index=config.data.ignore_token_id
         )
 
+        # We add the extra sentence length tokens to the vocab size
+        vocab_size = len(tokenizer) + config.max_sentence_len
         # to do partitioning, our dimensions have to be divisible by the size of the physical axes they're mapped to
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
         # tokens: gpt-2 has 50257, for example. So we round up.
-        vocab_size = len(tokenizer)
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")

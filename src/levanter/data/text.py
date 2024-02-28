@@ -403,6 +403,9 @@ class BatchTokenizer(BatchProcessor[str]):
 
         if needs_merge:
             new_encoding = self._merge_split_encodings(batch, encoding, needs_merge, wc, eos_token_id=self._eos_token_id)
+            for k, v in new_encoding.items():
+                if len(v) == 0:
+                    print("Empty encoding for ", k)
             encoding = BatchEncoding(new_encoding)
 
         return encoding
