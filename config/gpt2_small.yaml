@@ -17,7 +17,9 @@ trainer:
   per_device_parallelism: -1
 
   checkpointer:
-    base_path: "/juice4/scr4/kathli/checkpoints"
+    base_path: gs://levanter-data/wcc-checkpoints/
+    # base_path: "/juice4/scr4/kathli/checkpoints"
+    save_interval: 30m
 
   train_batch_size: 512
 optimizer:

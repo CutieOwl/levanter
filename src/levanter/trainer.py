@@ -398,6 +398,7 @@ class Trainer:
             with capture_time() as loading_time:
                 example = next(iter_data)
 
+            #print("example", example.tokens.array.tolist())
             info = self.train_step(state, example)
             state = info.state
 
