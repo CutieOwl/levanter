@@ -1,7 +1,6 @@
 import dataclasses
 import logging
 import os
-os.environ['HF_HUB_OFFLINE']=1
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
