@@ -356,6 +356,7 @@ class BatchTokenizer(BatchProcessor[str]):
         self._vocab_size = tokenizer.vocab_size
         self._eos_token_id = tokenizer.eos_token_id
         self._max_sentence_len = _max_sentence_len
+        self._nlp = None
 
     def __call__(self, batch: Sequence[str]) -> BatchEncoding:
         # break strings at the sentence level
@@ -363,7 +364,8 @@ class BatchTokenizer(BatchProcessor[str]):
         batch = []
         needs_merge = []
         wc = []
-        self._nlp = stanza.Pipeline(lang="en", processors="tokenize")
+        if self._nlp is None:
+            self._nlp = stanza.Pipeline(lang="en", processors="tokenize")
         for i, d in enumerate(orig_batch):
             doc = self._nlp(d)
             split_sentences = [sentence.text for sentence in doc.sentences]
