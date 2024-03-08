@@ -365,7 +365,7 @@ class BatchTokenizer(BatchProcessor[str]):
         needs_merge = []
         wc = []
         if self._nlp is None:
-            self._nlp = stanza.Pipeline(lang="en", processors="tokenize")
+            self._nlp = stanza.Pipeline(lang="en", processors="tokenize", logging_level="ERROR")
         for i, d in enumerate(orig_batch):
             doc = self._nlp(d)
             split_sentences = [sentence.text for sentence in doc.sentences]
