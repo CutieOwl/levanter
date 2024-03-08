@@ -18,6 +18,7 @@ import jax
 import numpy as np
 import pyarrow as pa
 import regex
+import stanza
 from draccus import field
 from jaxtyping import PRNGKeyArray
 from tokenizers import normalizers
@@ -355,6 +356,7 @@ class BatchTokenizer(BatchProcessor[str]):
         self._vocab_size = tokenizer.vocab_size
         self._eos_token_id = tokenizer.eos_token_id
         self._max_sentence_len = _max_sentence_len
+        self._nlp = stanza.Pipeline(lang="en", processors="tokenize")
 
     def __call__(self, batch: Sequence[str]) -> BatchEncoding:
         # break strings at the sentence level
@@ -363,25 +365,30 @@ class BatchTokenizer(BatchProcessor[str]):
         needs_merge = []
         wc = []
         for i, d in enumerate(orig_batch):
-            # Replace all instances of ." with ".
-            # This is a bit of a hack, but it's a common enough error that it's worth doing
-            d = d.replace('."', '".')
-            d = d.replace(".'", "'.")
-            d = d.replace('?"', '"?')
-            d = d.replace('!"', '"!')
-            d = d.replace("?'", "'?")
-            d = d.replace("!'", "'!")
-            # If d doesn't end with a sentence terminator, ignore it
-            if (d[-1] == "\n" and d[:-1].split()[-1][-1] not in ".!?") or (d.split()[-1][-1] not in ".!?"):
-                continue
-            split_sentences = re.split(r'(?<=[.!?])\s+', d)
+            # # Replace all instances of ." with ".
+            # # This is a bit of a hack, but it's a common enough error that it's worth doing
+            # d = d.replace('."', '".')
+            # d = d.replace(".'", "'.")
+            # d = d.replace('?"', '"?')
+            # d = d.replace('!"', '"!')
+            # d = d.replace("?'", "'?")
+            # d = d.replace("!'", "'!")
+            # # If d doesn't end with a sentence terminator, ignore it
+            # if (d[-1] == "\n" and d[:-1].split()[-1][-1] not in ".!?") or (d.split()[-1][-1] not in ".!?"):
+            #     continue
+            doc = self._nlp(d)
+            split_sentences = [sentence.text for sentence in doc.sentences]
+            #split_sentences = re.split(r'(?<=[.!?])\s+', d)
             sentences = []
             for i in range(len(split_sentences)):
                 if len(split_sentences[i]) > 0 and len(split_sentences[i]) < self._max_sentence_len:
                     # ignore special case of "sentence is too long to fit in max_sentence_len (consider using a special character)?
                     if not split_sentences[i].startswith(" "):
                         split_sentences[i] = " " + split_sentences[i]
+                    print(split_sentences[i])
                     sentences.append(split_sentences[i])
+                else:
+                    print("Ignoring sentence because it is too long, length:" + str(len(split_sentences[i])))
             word_counts = [len(s.split()) for s in sentences] # could alternatively try token counts
 
             if sentences: # if we didn't delete everything in d
