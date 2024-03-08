@@ -3,5 +3,5 @@ train_urls:
 validation_urls:
   - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
 #cache_dir: "gs://levanter-data/tokenized/openwebtext_wcc/"
-cache_dir: "/juice4/scr4/kathli/data_cache/openwebtext_wcc_stanza_testing"
+cache_dir: "gs://levanter-data/tokenized/openwebtext_wcc_stanza_testing"
 tokenizer: "gpt2"
