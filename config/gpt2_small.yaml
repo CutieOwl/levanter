@@ -16,6 +16,8 @@ trainer:
   model_axis_size: 1
   per_device_parallelism: -1
 
+  load_checkpoint_path: "gs://levanter-data/wcc-checkpoints/1aw6bz4i/step-10365"
+
   checkpointer:
     base_path: gs://levanter-data/wcc-checkpoints/
     # base_path: "/juice4/scr4/kathli/checkpoints"

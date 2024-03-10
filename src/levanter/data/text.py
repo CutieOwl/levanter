@@ -18,7 +18,7 @@ import jax
 import numpy as np
 import pyarrow as pa
 import regex
-import spacy
+import stanza
 from draccus import field
 from jaxtyping import PRNGKeyArray
 from tokenizers import normalizers
@@ -357,7 +357,7 @@ class BatchTokenizer(BatchProcessor[str]):
         self._vocab_size = tokenizer.vocab_size
         self._eos_token_id = tokenizer.eos_token_id
         self._max_sentence_len = _max_sentence_len
-        self._nlp = _nlp
+        self._nlp = None
 
     def __call__(self, batch: Sequence[str]) -> BatchEncoding:
         # break strings at the sentence level
@@ -366,10 +366,10 @@ class BatchTokenizer(BatchProcessor[str]):
         needs_merge = []
         wc = []
         if self._nlp is None:
-            self._nlp = spacy.load('en_core_web_sm')
+            self._nlp = stanza.Pipeline(lang="en", processors="tokenize", logging_level="ERROR")
         for i, d in enumerate(orig_batch):
             doc = self._nlp(d)
-            split_sentences = [sentence.text for sentence in doc.sents]
+            split_sentences = [sentence.text for sentence in doc.sentences]
             #split_sentences = re.split(r'(?<=[.!?])\s+', d)
             sentences = []
             for i in range(len(split_sentences)):
@@ -381,8 +381,8 @@ class BatchTokenizer(BatchProcessor[str]):
                     if split_sentences[i][-1] not in ".!?" and split_sentences[i][-2] not in ".!?":
                         continue
                     sentences.append(split_sentences[i])
-                else:
-                    print("Ignoring sentence because it is too long, length:" + str(len(split_sentences[i])))
+                # else:
+                #     print("Ignoring sentence because it is too long, length:" + str(len(split_sentences[i])))
             word_counts = [len(s.split()) for s in sentences] # could alternatively try token counts
 
             if sentences: # if we didn't delete everything in d
@@ -850,3 +850,4 @@ class LMMixtureDatasetConfig(LMTaskConfig):
             else:
                 caches[name] = cache
         return caches
+        
